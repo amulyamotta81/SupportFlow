@@ -1,0 +1,4 @@
+[
+  {"ticketId": "TKT-00001", "issue": "VPN not connecting", "category": "Network", "priority": "High", "status": "Resolved", "solution": "Renewed certificate"},
+  {"ticketId": "TKT-00002", "issue": "Email access denied", "category": "Email", "priority": "High", "status": "Resolved", "solution": "Password reset"}
+]
