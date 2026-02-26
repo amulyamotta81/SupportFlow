@@ -11,7 +11,7 @@ router.post('/message', authenticate, async (req, res) => {
     const response = await axios.post(`${AI_URL}/api/chat`, {
       message,
       userId: req.user._id.toString()
-    }, { timeout: 15000 });
+    }, { timeout: 120000 }); // 120s — Ollama local LLM needs time
     res.json(response.data);
   } catch (err) {
     console.error('Chat AI error:', err.message);

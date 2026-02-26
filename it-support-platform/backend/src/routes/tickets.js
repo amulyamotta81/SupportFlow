@@ -17,7 +17,7 @@ const callAI = async (endpoint, data) => {
   }
 };
 
-/** Fetch real similar resolved tickets from MongoDB (dynamic, not hardcoded) */
+/** Fetch real similar resolved tickets from MongoDB */
 const fetchSimilarTicketsFromDB = async (issue, category, limit = 5) => {
   const baseQuery = { status: 'Resolved', resolution: { $exists: true, $ne: '' } };
   const query = category && category !== 'General' ? { ...baseQuery, category } : baseQuery;
@@ -34,20 +34,21 @@ const fetchSimilarTicketsFromDB = async (issue, category, limit = 5) => {
       .lean();
   }
   return candidates.slice(0, limit).map((t, i) => ({
-    ticketId: t.ticketId,
-    issue: t.issue,
-    solution: t.resolution || 'N/A',
+    ticketId:   t.ticketId,
+    issue:      t.issue,
+    solution:   t.resolution || 'N/A',
     similarity: Math.max(0.7, 0.95 - i * 0.05)
   }));
 };
 
+// GET /api/tickets — employee sees own, agent sees assigned, admin sees all
 router.get('/', authenticate, async (req, res) => {
   try {
     const query = {};
     if (req.user.role === 'employee') query.userId = req.user._id;
-    if (req.user.role === 'agent') query.assignedAgentId = req.user._id;
+    if (req.user.role === 'agent')    query.assignedAgentId = req.user._id;
     const tickets = await Ticket.find(query)
-      .populate('userId', 'name email')
+      .populate('userId',          'name email')
       .populate('assignedAgentId', 'name email skills')
       .sort({ createdAt: -1 });
     res.json(tickets);
@@ -56,10 +57,11 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/tickets/all — admin only
 router.get('/all', authenticate, authorize('admin'), async (req, res) => {
   try {
     const tickets = await Ticket.find()
-      .populate('userId', 'name email')
+      .populate('userId',          'name email')
       .populate('assignedAgentId', 'name email skills workload')
       .sort({ createdAt: -1 });
     res.json(tickets);
@@ -68,13 +70,17 @@ router.get('/all', authenticate, authorize('admin'), async (req, res) => {
   }
 });
 
+// GET /api/tickets/:id
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id)
-      .populate('userId', 'name email')
+      .populate('userId',          'name email')
       .populate('assignedAgentId', 'name email skills workload successRate');
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
-    if (req.user.role === 'employee' && ticket.userId._id.toString() !== req.user._id.toString()) {
+    if (
+      req.user.role === 'employee' &&
+      ticket.userId._id.toString() !== req.user._id.toString()
+    ) {
       return res.status(403).json({ error: 'Access denied' });
     }
     res.json(ticket);
@@ -83,51 +89,58 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/tickets — create ticket
 router.post('/', authenticate, async (req, res) => {
   try {
-    const { issue, category, priority, attachmentUrl } = req.body;
-    const agents = await User.find({ role: 'agent' }).select('_id skills workload').sort({ workload: 1 }).lean();
+    const { issue, category, priority, attachmentUrl, aiAnalysis: clientAiAnalysis } = req.body;
+
+    // Auto-assign agent
+    const agents = await User.find({ role: 'agent' })
+      .select('_id skills workload')
+      .sort({ workload: 1 })
+      .lean();
     const agentsPayload = agents.map(a => ({ id: a._id.toString(), skills: a.skills || [] }));
+
+    // Call AI analyze endpoint (for agent routing) — non-blocking
     const aiResult = await callAI('/api/analyze', { issue, agents: agentsPayload });
+
     const resolvedCategory = category || aiResult?.category || 'General';
     const resolvedPriority = priority || aiResult?.priority || 'Medium';
 
-    // Replace AI's hardcoded similarTickets with real tickets from MongoDB
+    // Merge: prefer client-side AI analysis (richer, from RAG chatbot) over analyze endpoint
     const similarTickets = await fetchSimilarTicketsFromDB(issue, resolvedCategory, 5);
-    const aiAnalysis = { ...(aiResult || {}), similarTickets };
+    const aiAnalysis = clientAiAnalysis
+      ? { ...clientAiAnalysis, similarTickets }
+      : { ...(aiResult || {}), similarTickets };
 
-    const count = await Ticket.countDocuments();
+    const count    = await Ticket.countDocuments();
     const ticketId = `TKT-${String(count + 1).padStart(5, '0')}`;
 
     const ticket = await Ticket.create({
       ticketId,
-      userId: req.user._id,
+      userId:      req.user._id,
       issue,
-      category: resolvedCategory,
-      priority: resolvedPriority,
+      category:    resolvedCategory,
+      priority:    resolvedPriority,
       attachmentUrl,
       aiAnalysis,
       slaDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
 
-    if (aiResult && aiResult.bestAgent) {
-      const agent = await User.findOne({ _id: aiResult.bestAgent }).where({ role: 'agent' });
-      if (agent) {
-        ticket.assignedAgentId = agent._id;
-        await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
-        await ticket.save();
-      }
-    } else {
-      const agent = await User.findOne({ role: 'agent' }).sort({ workload: 1 });
-      if (agent) {
-        ticket.assignedAgentId = agent._id;
-        await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
-        await ticket.save();
-      }
+    // Assign best agent
+    const bestAgentId = aiResult?.bestAgent;
+    const agent = bestAgentId
+      ? await User.findOne({ _id: bestAgentId, role: 'agent' })
+      : await User.findOne({ role: 'agent' }).sort({ workload: 1 });
+
+    if (agent) {
+      ticket.assignedAgentId = agent._id;
+      await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
+      await ticket.save();
     }
 
     const populated = await Ticket.findById(ticket._id)
-      .populate('userId', 'name email')
+      .populate('userId',          'name email')
       .populate('assignedAgentId', 'name email skills');
     res.status(201).json(populated);
   } catch (err) {
@@ -135,38 +148,85 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+// PATCH /api/tickets/:id — update status/resolution/notes/assignment
 router.patch('/:id', authenticate, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
-    
+
+    // Employees can only resolve their own tickets
+    if (
+      req.user.role === 'employee' &&
+      ticket.userId.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const { status, resolution, internalNotes, assignedAgentId } = req.body;
-    
-    if (status === 'Resolved' && resolution) {
-      ticket.status = 'Resolved';
-      ticket.resolution = resolution;
-      ticket.resolvedAt = new Date();
-      if (ticket.assignedAgentId) {
-        await User.updateOne({ _id: ticket.assignedAgentId }, { $inc: { workload: -1 } });
+
+    // ── Status update (BUG FIX: was overwriting Resolved with raw status) ──
+    if (status) {
+      const prevStatus = ticket.status;
+      ticket.status = status;
+
+      if (status === 'Resolved') {
+        ticket.resolvedAt = new Date();
+        // Store resolution text if provided
+        if (resolution) ticket.resolution = resolution;
+        // Free up agent workload
+        if (ticket.assignedAgentId) {
+          await User.updateOne(
+            { _id: ticket.assignedAgentId },
+            { $inc: { workload: -1 } }
+          );
+        }
+      } else if (prevStatus === 'Resolved' && status !== 'Resolved') {
+        // Re-opening: add workload back
+        if (ticket.assignedAgentId) {
+          await User.updateOne(
+            { _id: ticket.assignedAgentId },
+            { $inc: { workload: 1 } }
+          );
+        }
+        ticket.resolvedAt = undefined;
       }
     }
-    if (status) ticket.status = status;
+
+    // Standalone resolution text update (without status change)
+    if (resolution && !status) {
+      ticket.resolution = resolution;
+    }
+
+    // Internal notes
     if (internalNotes) {
       ticket.internalNotes = ticket.internalNotes || [];
-      ticket.internalNotes.push({ userId: req.user._id, text: internalNotes, createdAt: new Date() });
+      ticket.internalNotes.push({
+        userId:    req.user._id,
+        text:      internalNotes,
+        createdAt: new Date()
+      });
     }
+
+    // Agent reassignment — admin only
     if (assignedAgentId && req.user.role === 'admin') {
       if (ticket.assignedAgentId) {
-        await User.updateOne({ _id: ticket.assignedAgentId }, { $inc: { workload: -1 } });
+        await User.updateOne(
+          { _id: ticket.assignedAgentId },
+          { $inc: { workload: -1 } }
+        );
       }
       ticket.assignedAgentId = assignedAgentId;
-      await User.updateOne({ _id: assignedAgentId }, { $inc: { workload: 1 } });
+      await User.updateOne(
+        { _id: assignedAgentId },
+        { $inc: { workload: 1 } }
+      );
     }
+
     ticket.updatedAt = new Date();
     await ticket.save();
 
     const updated = await Ticket.findById(ticket._id)
-      .populate('userId', 'name email')
+      .populate('userId',          'name email')
       .populate('assignedAgentId', 'name email skills workload successRate');
     res.json(updated);
   } catch (err) {
@@ -174,12 +234,17 @@ router.patch('/:id', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/tickets/:id/notes
 router.post('/:id/notes', authenticate, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
     ticket.internalNotes = ticket.internalNotes || [];
-    ticket.internalNotes.push({ userId: req.user._id, text: req.body.text, createdAt: new Date() });
+    ticket.internalNotes.push({
+      userId:    req.user._id,
+      text:      req.body.text,
+      createdAt: new Date()
+    });
     await ticket.save();
     res.json(ticket);
   } catch (err) {

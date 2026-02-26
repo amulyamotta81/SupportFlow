@@ -1,9 +1,18 @@
+# Web Framework
 fastapi==0.109.0
-uvicorn==0.27.0
-python-multipart==0.0.6
-httpx==0.26.0
+uvicorn[standard]==0.27.0
 pydantic==2.5.3
-faiss-cpu==1.13.2
+
+# Vector Store (FAISS — no C++ compiler needed on Windows)
+faiss-cpu==1.9.0.post1
+
+# Embeddings (local, free)
 sentence-transformers==2.2.2
-numpy>=1.26.3
-pypdf==3.17.4
+
+# LLM providers (use one or both)
+openai==1.10.0
+
+# Utils
+python-dotenv==1.0.0
+numpy==1.25.0
+pandas==2.0.3
