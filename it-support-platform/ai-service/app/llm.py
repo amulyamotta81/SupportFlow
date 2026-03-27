@@ -59,7 +59,7 @@ Provide your answer, then end with CONFIDENCE: <score>"""
         resp = requests.post(
             f"{OLLAMA_URL}/api/chat",
             json=payload,
-            timeout=120   # local LLM can be slow on first run
+            timeout=12000  # local LLM can be slow on first run
         )
         resp.raise_for_status()
         full_text = resp.json()["message"]["content"].strip()

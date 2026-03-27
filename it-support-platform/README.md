@@ -37,7 +37,7 @@ npm run dev
 ```bash
 cd ai-service
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn main:app --reload --port 8000
 ```
 *Note: Without FAISS/sentence-transformers, the AI uses a keyword-based fallback that still provides classification and suggestions.*
 
@@ -69,3 +69,8 @@ npm run dev
 - Ticket Intelligence View with AI analysis
 - Agent Dashboard with SLA tracking
 - Admin Panel with analytics and knowledge base management
+
+
+for kb building 
+-- python build_kb.py --csv file1.csv file2.csv
+then start ai service.

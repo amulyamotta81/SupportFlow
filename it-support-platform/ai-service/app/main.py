@@ -111,18 +111,23 @@ def chat(req: ChatRequest):
             final_confidence=0, decision="escalate", sources=[]
         )
 
-    top          = results[0]
-    similarity   = top["similarity"]
-    success_rate = top["success_rate"]
+    top = results[0]
+    
+    # SAFE FIELD ACCESS with defaults
+    similarity   = top.get("similarity", 0.0)
+    success_rate = top.get("success_rate", 0.75)  # Default 75% success rate
+    category     = top.get("category", "General")
+    priority     = top.get("priority", "Medium")
 
     # 2. Build context for LLM
     context_parts = []
     for r in results:
+        # Safe access for all fields
         context_parts.append(
-            f"Issue: {r['issue']}\n"
-            f"Category: {r['category']} | Priority: {r['priority']}\n"
-            f"Resolution: {r['resolution']}\n"
-            f"Historical Success Rate: {r['success_rate']*100:.0f}%"
+            f"Issue: {r.get('issue', 'N/A')}\n"
+            f"Category: {r.get('category', 'General')} | Priority: {r.get('priority', 'Medium')}\n"
+            f"Resolution: {r.get('resolution', 'No resolution available')}\n"
+            f"Historical Success Rate: {r.get('success_rate', 0.75)*100:.0f}%"
         )
     context = "\n\n---\n\n".join(context_parts)
 
@@ -130,9 +135,8 @@ def chat(req: ChatRequest):
     try:
         answer, llm_conf = ask_llm(query=query, context=context)
     except RuntimeError as e:
-        # Ollama not running — still return FAISS results with fallback answer
         print(f"⚠️  LLM unavailable: {e}")
-        answer   = f"Based on similar past issues:\n\n{results[0]['resolution']}"
+        answer   = f"Based on similar past issues:\n\n{results[0].get('resolution', 'No solution available')}"
         llm_conf = 0.0
 
     # 4. Final confidence + decision
@@ -142,24 +146,24 @@ def chat(req: ChatRequest):
     # 5. Clean sources for response
     sources = [
         {
-            "issue":        r["issue"],
-            "category":     r["category"],
-            "priority":     r["priority"],
-            "resolution":   r["resolution"],
-            "similarity":   round(r["similarity"], 3),
-            "success_rate": r["success_rate"],
+            "issue":        r.get("issue", "N/A"),
+            "category":     r.get("category", "General"),
+            "priority":     r.get("priority", "Medium"),
+            "resolution":   r.get("resolution", "No resolution"),
+            "similarity":   round(r.get("similarity", 0.0), 3),
+            "success_rate": r.get("success_rate", 0.75),
         }
         for r in results
     ]
 
     return ChatResponse(
         answer=answer,
-        category=top["category"],
-        priority=top["priority"],
-        similarity_score=round(similarity,  3),
-        llm_confidence=round(llm_conf,      3),
-        success_rate=round(success_rate,    3),
-        final_confidence=round(final_conf,  3),
+        category=category,
+        priority=priority,
+        similarity_score=round(similarity, 3),
+        llm_confidence=round(llm_conf, 3),
+        success_rate=round(success_rate, 3),
+        final_confidence=round(final_conf, 3),
         decision=action,
         sources=sources,
     )

@@ -1,4 +1,4 @@
-issue,category,priority,resolution,success_rate,ticket_count
+issue,category,priority,resolution,4,ticket_count
 VPN not connecting after certificate update,Network,High,"1. Open VPN client settings\n2. Navigate to certificate management\n3. Import new certificate from IT portal\n4. Restart VPN service\n5. Test connection",0.92,45
 Outlook keeps crashing on startup,Email,High,"1. Close Outlook completely via Task Manager\n2. Navigate to %localappdata%\Microsoft\Outlook\n3. Delete all .ost files\n4. Restart Outlook - it will rebuild the cache\n5. If issue persists create new profile",0.88,38
 Printer not responding to print jobs,Hardware,Medium,"1. Open Services (services.msc)\n2. Restart Print Spooler service\n3. Clear print queue in Control Panel > Devices\n4. Remove and re-add printer\n5. Update printer driver from manufacturer website",0.85,52
