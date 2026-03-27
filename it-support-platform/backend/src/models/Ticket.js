@@ -9,25 +9,43 @@ const ticketSchema = new mongoose.Schema({
   priority: { type: String, enum: ['Low', 'Medium', 'High', 'Critical'], default: 'Medium' },
   status: { type: String, enum: ['Open', 'In Progress', 'Resolved', 'Escalated'], default: 'Open' },
   attachmentUrl: { type: String },
+
   aiAnalysis: {
-    category: String,
-    priority: String,
+    category:   String,
+    priority:   String,
     confidence: Number,
-    rootCause: String,
+    rootCause:  String,
     suggestedFix: [String],
     similarTickets: [{
-      ticketId: String,
-      issue: String,
-      solution: String,
+      ticketId:   String,
+      issue:      String,
+      solution:   String,
       similarity: Number
     }]
   },
-  slaDeadline: { type: Date },
+
+  // Agent or Admin submits resolution notes to the user
+  agentSolution: {
+    text:        { type: String },
+    steps:       [{ type: String }],
+    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    submittedAt: { type: Date },
+    role:        { type: String },   // 'agent' | 'admin'
+  },
+
+  // User's response to the agent solution
+  userFeedback: {
+    satisfied:   { type: Boolean },
+    replyNote:   { type: String },
+    submittedAt: { type: Date },
+  },
+
+  slaDeadline:   { type: Date },
   internalNotes: [{ userId: mongoose.Schema.Types.ObjectId, text: String, createdAt: Date }],
-  resolution: { type: String },
-  resolvedAt: { type: Date },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  resolution:    { type: String },
+  resolvedAt:    { type: Date },
+  createdAt:     { type: Date, default: Date.now },
+  updatedAt:     { type: Date, default: Date.now }
 });
 
 export default mongoose.model('Ticket', ticketSchema);

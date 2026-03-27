@@ -8,7 +8,14 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['employee', 'agent', 'admin'], required: true },
   skills: [{ type: String }],
   workload: { type: Number, default: 0 },
-  successRate: { type: Number, default: 100 }
+  successRate: { type: Number, default: 100 },
+    conversationHistory: [
+    {
+      type: { type: String, enum: ['human', 'ai'], required: true }, // Message type
+      content: { type: String, required: true }, // Message content
+      timestamp: { type: Date, default: Date.now } // Message timestamp
+    }
+  ]
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {

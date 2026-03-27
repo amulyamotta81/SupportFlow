@@ -16,3 +16,11 @@ openai==1.10.0
 python-dotenv==1.0.0
 numpy==1.25.0
 pandas==2.0.3
+python-dotenv==1.0.0
+requests==2.31.0
+scikit-learn==1.5.2
+transformers==4.46.3
+datasets==3.1.0
+evaluate==0.4.3
+accelerate==1.1.1
+torch==2.5.1

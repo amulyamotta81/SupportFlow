@@ -10,6 +10,8 @@ import TicketList from './pages/TicketList';
 import TicketIntelligence from './pages/TicketIntelligence';
 import AgentDashboard from './pages/AgentDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import TicketDetail from './pages/TicketDetail';
+
 
 function PrivateRoute({ children, roles }) {
   const { user, loading } = useAuth();
@@ -23,6 +25,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
+      <Route path="/tickets/:id" element={<TicketDetail />} />
       <Route path="/login" element={<Login />} />
       <Route path="/dashboard" element={<PrivateRoute roles={['employee']}><EmployeeDashboard /></PrivateRoute>} />
       <Route path="/chat" element={<PrivateRoute roles={['employee']}><Chatbot /></PrivateRoute>} />
