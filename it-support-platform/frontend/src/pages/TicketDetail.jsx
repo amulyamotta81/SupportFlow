@@ -378,7 +378,7 @@ export default function TicketDetail() {
 
   const ai   = ticket.aiAnalysis || {};
   const conf = ai.confidence || 0;
-  const isOwner  = ticket.userId?._id === user?._id || ticket.userId === user?._id;
+  const isOwner  = (ticket.userId?._id ?? ticket.userId)?.toString() === user?._id?.toString();
   const isAgent  = user?.role === 'agent';
   const isAdmin  = user?.role === 'admin';
   const canAct   = isAgent || isAdmin;
@@ -431,7 +431,7 @@ export default function TicketDetail() {
           </div>
 
           {/* ── EMPLOYEE: Solution from agent ── */}
-          {user?.role === 'employee' && (
+          {user?.role === 'employee' && isOwner && (
             hasSolution ? (
               <Section title="Solution from your agent" icon={MessageSquare} accent="border-b border-blue-500/20">
                 <SolutionFeedbackPanel ticket={ticket} onUpdated={setTicket} />

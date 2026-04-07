@@ -24,13 +24,13 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
-      <Route path="/tickets/:id" element={<TicketDetail />} />
+      <Route path="/tickets/:id" element={<PrivateRoute><TicketDetail /></PrivateRoute>} />
       <Route path="/login" element={<Login />} />
       <Route path="/dashboard" element={<PrivateRoute roles={['employee']}><EmployeeDashboard /></PrivateRoute>} />
       <Route path="/chat" element={<PrivateRoute roles={['employee']}><Chatbot /></PrivateRoute>} />
       <Route path="/tickets/new" element={<PrivateRoute roles={['employee']}><TicketCreate /></PrivateRoute>} />
       <Route path="/tickets" element={<PrivateRoute><TicketList /></PrivateRoute>} />
-      <Route path="/tickets/:id" element={<PrivateRoute><TicketIntelligence /></PrivateRoute>} />
+      <Route path="/tickets/:id/intelligence" element={<PrivateRoute><TicketIntelligence /></PrivateRoute>} />
       <Route path="/agent" element={<PrivateRoute roles={['agent', 'admin']}><AgentDashboard /></PrivateRoute>} />
       <Route path="/admin" element={<PrivateRoute roles={['admin']}><AdminDashboard /></PrivateRoute>} />
       <Route path="/support" element={<Chatbot />} />
