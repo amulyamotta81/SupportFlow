@@ -234,6 +234,81 @@ router.patch('/:id', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/tickets/:id/solution — agent/admin submits solution to user
+router.post('/:id/solution', authenticate, authorize('agent', 'admin'), async (req, res) => {
+  try {
+    const ticket = await Ticket.findById(req.params.id);
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+    const { text, steps } = req.body;
+    if (!text?.trim()) return res.status(400).json({ error: 'Solution text is required.' });
+
+    ticket.agentSolution = {
+      text: text.trim(),
+      steps: Array.isArray(steps) ? steps.filter(s => s?.trim()) : [],
+      submittedBy: req.user._id,
+      submittedAt: new Date(),
+    };
+
+    // Advance status to In Progress if still Open
+    if (ticket.status === 'Open') ticket.status = 'In Progress';
+    ticket.updatedAt = new Date();
+    await ticket.save();
+
+    const updated = await Ticket.findById(ticket._id)
+      .populate('userId',          'name email')
+      .populate('assignedAgentId', 'name email skills workload successRate')
+      .populate('agentSolution.submittedBy', 'name email');
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/tickets/:id/feedback — employee gives feedback on agent solution
+router.post('/:id/feedback', authenticate, async (req, res) => {
+  try {
+    const ticket = await Ticket.findById(req.params.id);
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+    // Only the ticket owner can submit feedback
+    if (ticket.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (!ticket.agentSolution?.text) {
+      return res.status(400).json({ error: 'No solution has been submitted yet.' });
+    }
+
+    const { satisfied, replyNote } = req.body;
+    ticket.userFeedback = {
+      satisfied: !!satisfied,
+      replyNote: satisfied ? '' : (replyNote || ''),
+      submittedAt: new Date(),
+    };
+
+    if (satisfied) {
+      // Mark resolved and free up agent workload
+      ticket.status = 'Resolved';
+      ticket.resolvedAt = new Date();
+      ticket.resolution = ticket.agentSolution.text;
+      if (ticket.assignedAgentId) {
+        await User.updateOne({ _id: ticket.assignedAgentId }, { $inc: { workload: -1 } });
+      }
+    }
+
+    ticket.updatedAt = new Date();
+    await ticket.save();
+
+    const updated = await Ticket.findById(ticket._id)
+      .populate('userId',          'name email')
+      .populate('assignedAgentId', 'name email skills workload successRate')
+      .populate('agentSolution.submittedBy', 'name email');
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/tickets/:id/notes
 router.post('/:id/notes', authenticate, async (req, res) => {
   try {

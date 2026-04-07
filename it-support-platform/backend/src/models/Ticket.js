@@ -24,6 +24,17 @@ const ticketSchema = new mongoose.Schema({
   },
   slaDeadline: { type: Date },
   internalNotes: [{ userId: mongoose.Schema.Types.ObjectId, text: String, createdAt: Date }],
+  agentSolution: {
+    text: { type: String },
+    steps: [{ type: String }],
+    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    submittedAt: { type: Date }
+  },
+  userFeedback: {
+    satisfied: { type: Boolean },
+    replyNote: { type: String },
+    submittedAt: { type: Date }
+  },
   resolution: { type: String },
   resolvedAt: { type: Date },
   createdAt: { type: Date, default: Date.now },
