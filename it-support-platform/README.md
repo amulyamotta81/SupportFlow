@@ -73,4 +73,4 @@ npm run dev
 
 for kb building 
 -- python build_kb.py --csv file1.csv file2.csv
-then start ai service.
+then start ai service using uvicorn command.
