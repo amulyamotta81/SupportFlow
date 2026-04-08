@@ -5,7 +5,8 @@ import api from '../services/api';
 import {
   Send, Ticket, CheckCircle, ArrowLeft,
   ChevronDown, ChevronUp, AlertTriangle,
-  Shield, Zap, BookOpen, ExternalLink
+  Zap, BookOpen,
+  MessageSquarePlus, Trash2, Clock
 } from 'lucide-react';
 
 // ── Confidence badge ──────────────────────────────────────────────
@@ -172,6 +173,61 @@ function MessageBubble({ m, onCreateTicket }) {
   );
 }
 
+// ── Chat History Sidebar ─────────────────────────────────────────
+function ChatHistorySidebar({ sessions, activeSessionId, onSelectSession, onNewChat, onDeleteSession }) {
+  return (
+    <div className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col flex-shrink-0">
+      {/* New Chat button */}
+      <div className="p-3 border-b border-slate-700">
+        <button
+          onClick={onNewChat}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+        >
+          <MessageSquarePlus size={16} /> New Chat
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div className="flex-1 overflow-y-auto">
+        {sessions.length === 0 ? (
+          <div className="p-4 text-center text-slate-500 text-xs">
+            No previous conversations
+          </div>
+        ) : (
+          <div className="py-1">
+            {sessions.map(s => (
+              <div
+                key={s.sessionId}
+                className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-colors ${
+                  s.sessionId === activeSessionId
+                    ? 'bg-slate-700/80 border-r-2 border-blue-500'
+                    : 'hover:bg-slate-700/40'
+                }`}
+                onClick={() => onSelectSession(s.sessionId)}
+              >
+                <Clock size={13} className="text-slate-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-slate-300 truncate">{s.title}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {s.messageCount} messages
+                  </p>
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); onDeleteSession(s.sessionId); }}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
+                  title="Delete conversation"
+                >
+                  <Trash2 size={12} className="text-red-400" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Chatbot ──────────────────────────────────────────────────
 export default function Chatbot() {
   const [messages, setMessages] = useState([
@@ -183,17 +239,88 @@ export default function Chatbot() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  const [showSidebar, setShowSidebar] = useState(true);
   const { user } = useAuth();
   const navigate = useNavigate();
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Load chat history sessions on mount
+  useEffect(() => {
+    if (user) loadSessions();
+  }, [user]);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
+  const loadSessions = async () => {
+    try {
+      const { data } = await api.get('/chat/history');
+      setSessions(data);
+    } catch (e) {
+      console.error('Failed to load chat history:', e);
+    }
+  };
+
+  const loadSession = async (sid) => {
+    try {
+      const { data } = await api.get(`/chat/history/${sid}`);
+      setSessionId(sid);
+
+      // Convert stored messages to display format
+      const welcomeMsg = {
+        role: 'assistant',
+        text: "Hi! I'm your IT Assistant. Describe your issue and I'll search our knowledge base for the best solution.",
+        meta: null
+      };
+
+      const loaded = data.messages.map(m => {
+        if (m.role === 'user') {
+          return { role: 'user', text: m.content, meta: null };
+        }
+        // Reconstruct assistant message with meta
+        const meta = m.meta ? {
+          category: m.meta.category || '',
+          priority: m.meta.priority || '',
+          final_confidence: m.meta.final_confidence ?? 0,
+          similarity_score: m.meta.similarity_score ?? 0,
+          llm_confidence: m.meta.llm_confidence ?? 0,
+          decision: m.meta.decision || '',
+          sources: m.meta.sources || [],
+          suggestedFix: m.meta.suggestedFix || [],
+          rawIssue: '',
+        } : null;
+        return { role: 'assistant', text: m.content, meta };
+      });
+
+      setMessages([welcomeMsg, ...loaded]);
+    } catch (e) {
+      console.error('Failed to load session:', e);
+    }
+  };
+
+  const startNewChat = () => {
+    setSessionId(null);
+    setMessages([{
+      role: 'assistant',
+      text: "Hi! I'm your IT Assistant. Describe your issue and I'll search our knowledge base for the best solution.",
+      meta: null
+    }]);
+    inputRef.current?.focus();
+  };
+
+  const deleteSession = async (sid) => {
+    try {
+      await api.delete(`/chat/history/${sid}`);
+      setSessions(prev => prev.filter(s => s.sessionId !== sid));
+      if (sessionId === sid) startNewChat();
+    } catch (e) {
+      console.error('Failed to delete session:', e);
+    }
+  };
+
   const parseAnswer = (answer) => {
-    // If the AI returns numbered steps embedded in the answer text,
-    // extract them so we can render them as a step list.
-    // Pattern: lines starting with "1." "2." etc.
     const lines = answer.split('\n').map(l => l.trim()).filter(Boolean);
     const stepLines = lines.filter(l => /^\d+[\.\)]/.test(l));
     if (stepLines.length >= 2) {
@@ -213,17 +340,21 @@ export default function Chatbot() {
     setLoading(true);
 
     try {
-      const { data } = await api.post('/chat/message', { message: msg });
+      const { data } = await api.post('/chat/message', {
+        message: msg,
+        sessionId: sessionId || undefined,
+      });
 
-      // The FastAPI response fields (proxied through Express /api/chat/message)
-      // Fields: answer, category, priority, similarity_score, llm_confidence,
-      //         success_rate, final_confidence, decision, sources, suggestedFix
-      // Fallback: older Express-only shape uses `response`, `suggestedCategory`, etc.
+      // Track session ID from backend
+      if (data.sessionId && !sessionId) {
+        setSessionId(data.sessionId);
+        // Refresh sidebar
+        loadSessions();
+      }
 
       const answer = data.answer || data.response || 'No response received.';
       const { prose, steps } = parseAnswer(answer);
 
-      // Merge suggestedFix from API or extracted steps
       const suggestedFix =
         data.suggestedFix?.length > 0 ? data.suggestedFix :
         steps.length > 0 ? steps : [];
@@ -244,6 +375,9 @@ export default function Chatbot() {
       };
 
       setMessages(m => [...m, { role: 'assistant', text: prose, meta }]);
+
+      // Refresh sessions list to update last message
+      loadSessions();
     } catch (e) {
       setMessages(m => [...m, {
         role: 'assistant',
@@ -277,14 +411,12 @@ export default function Chatbot() {
     });
   };
 
-  const lastUserText = [...messages].reverse().find(m => m.role === 'user')?.text || '';
   const lastMeta = [...messages].reverse().find(m => m.role === 'assistant' && m.meta)?.meta;
   const [resolving, setResolving] = useState(false);
 
   const handleIssueSolved = async () => {
     setResolving(true);
     try {
-      // Find the most recent open ticket for this user and mark it Resolved
       const { data: tickets } = await api.get('/tickets');
       const latest = tickets.find(t => t.status !== 'Resolved');
       if (latest) {
@@ -306,9 +438,22 @@ export default function Chatbot() {
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
       {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex justify-between items-center flex-shrink-0">
-        <Link to={user ? '/dashboard' : '/'} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm">
-          <ArrowLeft size={18} /> Back
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link to={user ? '/dashboard' : '/'} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm">
+            <ArrowLeft size={18} /> Back
+          </Link>
+          {/* Sidebar toggle */}
+          {user && (
+            <button
+              onClick={() => setShowSidebar(s => !s)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors"
+              title="Toggle chat history"
+            >
+              <Clock size={14} />
+              History
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
             <Zap size={14} className="text-white" />
@@ -328,67 +473,84 @@ export default function Chatbot() {
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-2xl mx-auto">
-          {messages.map((m, i) => (
-            <MessageBubble key={i} m={m} onCreateTicket={handleCreateTicket} />
-          ))}
-          {loading && (
-            <div className="flex items-center gap-2 text-slate-400 text-sm mb-4">
-              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
-                <Zap size={12} className="text-white" />
-              </div>
-              <div className="flex gap-1">
-                <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-      </div>
+      {/* Main content: sidebar + chat */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Chat History Sidebar */}
+        {user && showSidebar && (
+          <ChatHistorySidebar
+            sessions={sessions}
+            activeSessionId={sessionId}
+            onSelectSession={loadSession}
+            onNewChat={startNewChat}
+            onDeleteSession={deleteSession}
+          />
+        )}
 
-      {/* Input area */}
-      <div className="flex-shrink-0 bg-slate-800 border-t border-slate-700 p-4">
-        <div className="max-w-2xl mx-auto space-y-3">
-          <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
-              placeholder={user ? "Describe your IT issue..." : "Login to use the assistant"}
-              className="flex-1 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl text-sm placeholder-slate-400 focus:outline-none focus:border-blue-500 transition-colors disabled:opacity-50"
-              disabled={!user || loading}
-            />
-            <button
-              onClick={send}
-              disabled={loading || !user || !input.trim()}
-              className="px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition-colors"
-            >
-              <Send size={18} />
-            </button>
+        {/* Chat area */}
+        <div className="flex-1 flex flex-col">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-6">
+            <div className="max-w-2xl mx-auto">
+              {messages.map((m, i) => (
+                <MessageBubble key={i} m={m} onCreateTicket={handleCreateTicket} />
+              ))}
+              {loading && (
+                <div className="flex items-center gap-2 text-slate-400 text-sm mb-4">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
+                    <Zap size={12} className="text-white" />
+                  </div>
+                  <div className="flex gap-1">
+                    <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </div>
           </div>
 
-          <div className="flex gap-3">
-            <button
-              onClick={handleIssueSolved}
-              disabled={resolving}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-600/40 rounded-lg text-emerald-300 text-xs transition-colors disabled:opacity-50"
-            >
-              {resolving
-                ? <div className="w-3 h-3 border border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                : <CheckCircle size={14} />}
-              Issue Solved
-            </button>
-            <button
-              onClick={() => handleCreateTicket(lastMeta)}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-600/40 rounded-lg text-amber-300 text-xs transition-colors"
-            >
-              <Ticket size={14} /> Create Ticket
-            </button>
+          {/* Input area */}
+          <div className="flex-shrink-0 bg-slate-800 border-t border-slate-700 p-4">
+            <div className="max-w-2xl mx-auto space-y-3">
+              <div className="flex gap-2">
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+                  placeholder={user ? "Describe your IT issue..." : "Login to use the assistant"}
+                  className="flex-1 px-4 py-3 bg-slate-700 border border-slate-600 rounded-xl text-sm placeholder-slate-400 focus:outline-none focus:border-blue-500 transition-colors disabled:opacity-50"
+                  disabled={!user || loading}
+                />
+                <button
+                  onClick={send}
+                  disabled={loading || !user || !input.trim()}
+                  className="px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition-colors"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handleIssueSolved}
+                  disabled={resolving}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-600/40 rounded-lg text-emerald-300 text-xs transition-colors disabled:opacity-50"
+                >
+                  {resolving
+                    ? <div className="w-3 h-3 border border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                    : <CheckCircle size={14} />}
+                  Issue Solved
+                </button>
+                <button
+                  onClick={() => handleCreateTicket(lastMeta)}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-600/40 rounded-lg text-amber-300 text-xs transition-colors"
+                >
+                  <Ticket size={14} /> Create Ticket
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
