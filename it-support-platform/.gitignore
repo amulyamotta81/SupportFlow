@@ -4,3 +4,5 @@ dist
 *.log
 *.env
 venv_rag/
+venv*/
+__pycache__/

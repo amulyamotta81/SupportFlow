@@ -218,7 +218,9 @@ router.post('/:id/feedback', authenticate, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
-    if (ticket.userId.toString() !== req.user._id.toString())
+    // Allow ticket owner OR admin to submit feedback
+    const ownerId = (ticket.userId?._id ?? ticket.userId)?.toString();
+    if (ownerId !== req.user._id.toString() && req.user.role !== 'admin')
       return res.status(403).json({ error: 'Access denied' });
     if (!ticket.agentSolution?.text)
       return res.status(400).json({ error: 'No solution submitted yet' });

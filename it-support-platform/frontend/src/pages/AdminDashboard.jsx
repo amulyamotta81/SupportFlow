@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import {
   Home, Users, Ticket, BarChart3, Brain, Bell, LogOut,
-  RefreshCw, AlertTriangle, CheckCircle2, ThumbsDown, Database
+  RefreshCw, AlertTriangle, CheckCircle2, ThumbsDown, Database, Search
 } from 'lucide-react';
 
 const STATUS_STYLE = {
@@ -51,6 +51,7 @@ export default function AdminDashboard() {
   const [agents, setAgents]         = useState([]);
   const [tickets, setTickets]       = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchAll = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -76,6 +77,20 @@ export default function AdminDashboard() {
   const escalated  = tickets.filter(t => t.status === 'Escalated');
   const userReplied = tickets.filter(t => t.userFeedback?.satisfied === false);
   const alertCount = escalated.length + userReplied.length;
+
+  // Filter tickets by search query (ticket ID, issue text, category, user name)
+  const filteredTickets = searchQuery.trim()
+    ? tickets.filter(t => {
+        const q = searchQuery.toLowerCase();
+        return (
+          (t.ticketId || '').toLowerCase().includes(q) ||
+          (t.issue || '').toLowerCase().includes(q) ||
+          (t.category || '').toLowerCase().includes(q) ||
+          (t.userId?.name || '').toLowerCase().includes(q) ||
+          (t.userId?.email || '').toLowerCase().includes(q)
+        );
+      })
+    : tickets;
 
   const NavBtn = ({ section, icon: Icon, label, badge }) => (
     <button
@@ -106,7 +121,8 @@ export default function AdminDashboard() {
     >
       <span className="font-mono text-blue-400 text-xs w-24 flex-shrink-0">{t.ticketId}</span>
       <span className="flex-1 text-sm text-slate-200 truncate">{t.issue}</span>
-      <span className="text-xs text-slate-500 hidden md:block">{t.userId?.name}</span>
+      <span className="text-xs text-slate-500 hidden md:block w-20 flex-shrink-0">{t.category}</span>
+      <span className="text-xs text-slate-500 hidden md:block flex-shrink-0">{t.userId?.name}</span>
       {t.userFeedback?.satisfied === false && (
         <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30 flex-shrink-0">
           <ThumbsDown size={10} /> User replied
@@ -281,15 +297,42 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ALL TICKETS */}
+          {/* ALL TICKETS — with search */}
           {activeSection === 'tickets' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">All Tickets ({tickets.length})</h3>
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="font-semibold flex-shrink-0">All Tickets ({filteredTickets.length})</h3>
+                <div className="relative flex-1 max-w-md">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search by Ticket ID (TKT-00001), issue, category, or user..."
+                    className="w-full pl-9 pr-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
-              {tickets.slice(0, 30).map(t => <TicketRow key={t._id} t={t} />)}
-              {tickets.length > 30 && (
-                <p className="text-slate-500 text-sm text-center">Showing 30 of {tickets.length}</p>
+
+              {filteredTickets.length === 0 && searchQuery ? (
+                <div className="p-8 text-center text-slate-500">
+                  <Search size={32} className="mx-auto mb-2 opacity-50" />
+                  <p>No tickets found matching "{searchQuery}"</p>
+                </div>
+              ) : (
+                <>
+                  {filteredTickets.slice(0, 50).map(t => <TicketRow key={t._id} t={t} />)}
+                  {filteredTickets.length > 50 && (
+                    <p className="text-slate-500 text-sm text-center">Showing 50 of {filteredTickets.length}</p>
+                  )}
+                </>
               )}
             </div>
           )}
