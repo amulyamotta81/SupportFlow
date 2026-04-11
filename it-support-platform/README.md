@@ -33,13 +33,17 @@ npm run seed    # Seeds 1000+ tickets and users
 npm run dev
 ```
 
+## for kb building 
+-- python build_kb.py --csv file1.csv file2.csv
+then start ai service using uvicorn
+
+
 ### 3. AI Service
 ```bash
 cd ai-service
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
-*Note: Without FAISS/sentence-transformers, the AI uses a keyword-based fallback that still provides classification and suggestions.*
 
 ### 3b. Sync Knowledge Base (Dynamic RAG)
 After seeding, sync resolved tickets to the AI for dynamic suggestions:
@@ -57,7 +61,7 @@ npm run dev
 ```
 
 ### Default Login Credentials
-- **Employee:** employee@test.com / password123
+- **Employee:** bob@company.com / password123
 - **Agent:** agent@test.com / password123
 - **Admin:** admin@test.com / password123
 
@@ -69,8 +73,3 @@ npm run dev
 - Ticket Intelligence View with AI analysis
 - Agent Dashboard with SLA tracking
 - Admin Panel with analytics and knowledge base management
-
-
-for kb building 
--- python build_kb.py --csv file1.csv file2.csv
-then start ai service using uvicorn
