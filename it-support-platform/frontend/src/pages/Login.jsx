@@ -50,7 +50,7 @@ export default function Login() {
           <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold">Login</button>
         </form>
         <p className="mt-4 text-slate-400 text-sm">
-          Demo logins: admin@test.com, employee@test.com, agent@test.com (all use password123)
+          Demo logins: admin@test.com, bob@company.com, agent@test.com (all use password123)
         </p>
       </div>
     </div>
