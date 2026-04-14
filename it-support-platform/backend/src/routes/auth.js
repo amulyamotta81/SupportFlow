@@ -18,8 +18,10 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
     const userData = await User.findById(user._id).select('-password');
+    console.log(`🔐 LOGIN  │ ${userData.role.toUpperCase().padEnd(8)} │ ${userData.name} (${email})`);
     res.json({ token, user: userData });
   } catch (err) {
+    console.log(`🔐 LOGIN  │ FAILED   │ ${req.body.email || '?'} — ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -37,6 +39,7 @@ router.post('/signup', async (req, res) => {
       { expiresIn: '7d' }
     );
     const userData = await User.findById(user._id).select('-password');
+    console.log(`🔐 SIGNUP │ ${userData.role.toUpperCase().padEnd(8)} │ ${userData.name} (${email})`);
     res.status(201).json({ token, user: userData });
   } catch (err) {
     res.status(500).json({ error: err.message });

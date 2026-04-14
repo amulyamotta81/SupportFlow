@@ -219,11 +219,17 @@ class RetrievalChain:
         root_cause: str = "",
         source: str = "dynamic",
         ticket_id: str = "",
+        failed_attempts: list[str] | None = None,
+        rounds_to_resolve: int = 1,
     ) -> bool:
         """
         Add a resolved ticket to the knowledge base.
         Called when a ticket is resolved (agent/admin solution confirmed).
         The KB grows dynamically so future queries benefit from past solutions.
+
+        If the ticket went through multiple rounds (user said "not working"
+        before the final fix), failed_attempts captures what didn't work.
+        This helps future RAG retrieval avoid suggesting known-bad fixes.
         """
         if not issue or not resolution:
             return False
@@ -232,6 +238,8 @@ class RetrievalChain:
         if root_cause:
             page_content += f"\n[CAUSE] {root_cause}"
         page_content += f"\n[CATEGORY] {category}"
+        if failed_attempts:
+            page_content += f"\n[FAILED] {' | '.join(failed_attempts)}"
         page_content += f"\n[RESOLUTION] {resolution}"
 
         metadata = {
@@ -243,13 +251,16 @@ class RetrievalChain:
             "ticket_count": 1,
             "source": source,
             "ticket_id": ticket_id,
+            "failed_attempts": failed_attempts or [],
+            "rounds_to_resolve": rounds_to_resolve,
         }
 
         doc = Document(page_content=page_content, metadata=metadata)
         self.vectorstore.add_documents([doc])
         self.save()
 
-        print(f"[RetrievalChain] Added to KB: {ticket_id or issue[:50]}")
+        rounds_info = f" (resolved in {rounds_to_resolve} round{'s' if rounds_to_resolve > 1 else ''})" if rounds_to_resolve > 1 else ""
+        print(f"[RetrievalChain] Added to KB: {ticket_id or issue[:50]}{rounds_info}")
         return True
 
     def rebuild_kb(self, tickets: list[dict]) -> int:

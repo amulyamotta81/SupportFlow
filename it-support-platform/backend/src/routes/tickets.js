@@ -7,12 +7,17 @@ import axios from 'axios';
 const router = express.Router();
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
+const log = (icon, action, detail) => {
+  const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  console.log(`${icon} ${ts} │ ${action.padEnd(20)} │ ${detail}`);
+};
+
 const callAI = async (endpoint, data, timeout = 10000) => {
   try {
     const res = await axios.post(`${AI_URL}${endpoint}`, data, { timeout });
     return res.data;
   } catch (err) {
-    console.error('AI service error:', err.message);
+    log('❌', 'AI SERVICE ERROR', `${endpoint} — ${err.message}`);
     return null;
   }
 };
@@ -81,13 +86,21 @@ router.get('/:id', authenticate, async (req, res) => {
 router.post('/', authenticate, async (req, res) => {
   try {
     const { issue, category, priority, attachmentUrl, aiAnalysis: clientAiAnalysis } = req.body;
+    log('📩', 'NEW TICKET', `"${issue.slice(0, 60)}" by ${req.user.name || req.user.email}`);
+
     const agents = await User.find({ role: 'agent' }).select('_id skills workload').sort({ workload: 1 }).lean();
     const aiResult = await callAI('/api/analyze', {
       issue, agents: agents.map(a => ({ id: a._id.toString(), skills: a.skills || [] }))
     });
+
     const resolvedCategory = category || aiResult?.category || 'General';
     const resolvedPriority = priority || aiResult?.priority || 'Medium';
+    log('🤖', 'AI CLASSIFICATION', `category=${resolvedCategory} │ priority=${resolvedPriority} │ confidence=${aiResult?.confidence ?? '—'}`);
+
     const similarTickets   = await fetchSimilarTicketsFromDB(issue, resolvedCategory, 5);
+    if (similarTickets.length)
+      log('🔍', 'SIMILAR TICKETS', `Found ${similarTickets.length} similar resolved tickets (top: ${similarTickets[0].ticketId}, ${Math.round(similarTickets[0].similarity * 100)}% match)`);
+
     const aiAnalysis = clientAiAnalysis
       ? { ...clientAiAnalysis, similarTickets }
       : { ...(aiResult || {}), similarTickets };
@@ -108,7 +121,10 @@ router.post('/', authenticate, async (req, res) => {
       ticket.assignedAgentId = agent._id;
       await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
       await ticket.save();
+      log('👤', 'AGENT ASSIGNED', `${ticketId} → ${agent.name || agent.email} (workload: ${agent.workload + 1})`);
     }
+
+    log('✅', 'TICKET CREATED', `${ticketId} │ ${resolvedCategory} │ ${resolvedPriority} │ SLA: 24h`);
 
     const populated = await Ticket.findById(ticket._id)
       .populate('userId', 'name email')
@@ -130,6 +146,7 @@ router.patch('/:id', authenticate, async (req, res) => {
     if (status) {
       const prev = ticket.status;
       ticket.status = status;
+      log('🔄', 'STATUS CHANGE', `${ticket.ticketId} │ ${prev} → ${status} │ by ${req.user.name || req.user.role}`);
       if (status === 'Resolved') {
         ticket.resolvedAt = new Date();
         if (resolution) ticket.resolution = resolution;
@@ -164,14 +181,15 @@ router.patch('/:id', authenticate, async (req, res) => {
 
     // KB update when admin/agent resolves with resolution text
     if (status === 'Resolved' && resolution && ['admin', 'agent'].includes(req.user.role)) {
+      const kbSource = req.user.role === 'admin' ? 'admin_resolution' : 'agent_resolution';
+      log('📚', 'KB UPDATE START', `${ticket.ticketId} │ source=${kbSource} │ "${resolution.slice(0, 60)}"`);
       callAI('/api/kb/add', {
         issue: ticket.issue, resolution,
         category: ticket.category || '', priority: ticket.priority || '',
-        source: req.user.role === 'admin' ? 'admin_resolution' : 'agent_resolution',
-        ticket_id: ticket.ticketId,
+        source: kbSource, ticket_id: ticket.ticketId,
       }, 15000)
-        .then(() => console.log(`✅ KB updated: ${ticket.ticketId}`))
-        .catch(e  => console.error(`⚠️  KB failed: ${e.message}`));
+        .then(r => log('📚', 'KB UPDATE OK', `${ticket.ticketId} │ FAISS vectors: ${r?.vectors ?? '?'}`))
+        .catch(e => log('📚', 'KB UPDATE FAIL', `${ticket.ticketId} │ ${e.message}`));
     }
 
     res.json(updated);
@@ -194,7 +212,9 @@ router.post('/:id/solution', authenticate, async (req, res) => {
     // If this is a revised solution (user previously said not working),
     // log the old solution in internal notes and clear feedback so the
     // conversation cycle restarts cleanly.
-    if (ticket.userFeedback?.satisfied === false && ticket.agentSolution?.text) {
+    const isRevision = ticket.userFeedback?.satisfied === false && ticket.agentSolution?.text;
+    if (isRevision) {
+      log('🔁', 'REVISED SOLUTION', `${ticket.ticketId} │ ${req.user.name || req.user.role} is revising after user rejected previous solution`);
       ticket.internalNotes = ticket.internalNotes || [];
       ticket.internalNotes.push({
         userId:    req.user._id,
@@ -215,6 +235,8 @@ router.post('/:id/solution', authenticate, async (req, res) => {
     if (ticket.status === 'Open') ticket.status = 'In Progress';
     ticket.updatedAt = new Date();
     await ticket.save();
+
+    log('💡', isRevision ? 'SOLUTION REVISED' : 'SOLUTION SENT', `${ticket.ticketId} │ by ${req.user.name || req.user.role} │ "${text.trim().slice(0, 60)}"`);
 
     const updated = await Ticket.findById(ticket._id)
       .populate('userId', 'name email')
@@ -247,20 +269,37 @@ router.post('/:id/feedback', authenticate, async (req, res) => {
     };
 
     if (satisfied) {
+      log('👍', 'USER CONFIRMED', `${ticket.ticketId} │ User says solution WORKED → resolving ticket`);
       ticket.status     = 'Resolved';
       ticket.resolvedAt = new Date();
       ticket.resolution = ticket.agentSolution.text;
       if (ticket.assignedAgentId)
         await User.updateOne({ _id: ticket.assignedAgentId }, { $inc: { workload: -1 } });
 
+      // Extract failed attempts from internal notes (revision history)
+      const revisionNotes = (ticket.internalNotes || []).filter(n => n.text?.includes('📝 Revised solution'));
+      const failedAttempts = revisionNotes.map(n => {
+        const match = n.text.match(/previous: "(.+?)"/);
+        return match ? match[1] : null;
+      }).filter(Boolean);
+      const roundsToResolve = failedAttempts.length + 1;
+
+      log('📚', 'KB LEARNING', `${ticket.ticketId} │ Adding to FAISS knowledge base │ rounds=${roundsToResolve} │ failed_attempts=${failedAttempts.length}`);
+      if (failedAttempts.length > 0)
+        log('📚', 'KB FAILED ATTEMPTS', `${ticket.ticketId} │ What DIDN'T work: ${failedAttempts.map(f => `"${f.slice(0, 40)}"`).join(', ')}`);
+      log('📚', 'KB WINNING FIX', `${ticket.ticketId} │ What WORKED: "${ticket.agentSolution.text.slice(0, 80)}"`);
+
       callAI('/api/kb/add', {
         issue: ticket.issue, resolution: ticket.agentSolution.text,
         category: ticket.category || '', priority: ticket.priority || '',
         source: 'user_confirmed', ticket_id: ticket.ticketId,
+        failed_attempts: failedAttempts,
+        rounds_to_resolve: roundsToResolve,
       }, 15000)
-        .then(() => console.log(`✅ KB updated (user confirmed): ${ticket.ticketId}`))
-        .catch(e  => console.error(`⚠️  KB failed: ${e.message}`));
+        .then(r => log('📚', 'KB UPDATE OK', `${ticket.ticketId} │ FAISS vectors: ${r?.vectors ?? '?'} │ KB evolved with user-confirmed solution`))
+        .catch(e => log('📚', 'KB UPDATE FAIL', `${ticket.ticketId} │ ${e.message}`));
     } else {
+      log('👎', 'USER REJECTED', `${ticket.ticketId} │ User says solution NOT working │ reopening ticket │ note: "${(replyNote || '—').slice(0, 60)}"`);
       ticket.status = 'Open';
       ticket.internalNotes = ticket.internalNotes || [];
       ticket.internalNotes.push({

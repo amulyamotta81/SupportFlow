@@ -51,13 +51,15 @@ router.get('/analytics/overview', authenticate, authorize('admin'), async (req, 
       Ticket.aggregate([{ $group: { _id: '$category', count: { $sum: 1 } } }]),
       Ticket.aggregate([{ $group: { _id: '$priority', count: { $sum: 1 } } }])
     ]);
+    const rate = ticketCount ? ((resolvedCount / ticketCount) * 100).toFixed(1) : 0;
+    console.log(`📊 ANALYTICS │ tickets=${ticketCount} │ resolved=${resolvedCount} │ rate=${rate}% │ agents=${agentCount}`);
     res.json({
       totalTickets: ticketCount,
       resolvedTickets: resolvedCount,
       agentCount,
       byCategory,
       byPriority,
-      resolutionRate: ticketCount ? ((resolvedCount / ticketCount) * 100).toFixed(1) : 0
+      resolutionRate: rate,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

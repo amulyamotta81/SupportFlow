@@ -100,6 +100,8 @@ class KBAddRequest(BaseModel):
     root_cause: str = ""
     source: str = "dynamic"
     ticket_id: str = ""
+    failed_attempts: list[str] = []
+    rounds_to_resolve: int = 1
 
 class RebuildRequest(BaseModel):
     tickets: list[dict]
@@ -206,13 +208,17 @@ def chat(req: ChatRequest):
         )
 
     # ── Step 1: Classification Chain (DistilBERT) ─────────────────────────
+    print(f"\n{'─'*70}")
+    print(f"🧠 RAG PIPELINE START │ user={user_id} │ query=\"{query[:60]}\"")
+    print(f"{'─'*70}")
     try:
         classification = classification_chain.classify(query)
         classified_category = classification["category"]
         classified_priority = classification["priority"]
         classification_confidence = classification["confidence"]
+        print(f"  ① CLASSIFICATION  │ category={classified_category} │ priority={classified_priority} │ confidence={classification_confidence:.3f}")
     except Exception as e:
-        print(f"[chat] Classification error: {e}")
+        print(f"  ① CLASSIFICATION  │ ERROR: {e} — falling back to General/Medium")
         classified_category = "General"
         classified_priority = "Medium"
         classification_confidence = 0.0
@@ -222,6 +228,9 @@ def chat(req: ChatRequest):
         retrieval_output = retrieval_chain.chain.invoke({"query": query, "top_k": 3})
         results = retrieval_output.get("results", [])
         context = retrieval_output.get("context", "")
+        print(f"  ② RETRIEVAL       │ {len(results)} similar tickets found in FAISS")
+        for i, r in enumerate(results[:3]):
+            print(f"     └─ #{i+1} {r.get('issue','?')[:50]} │ similarity={r.get('similarity',0):.3f}")
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Retrieval chain error: {str(e)}")
@@ -253,6 +262,7 @@ def chat(req: ChatRequest):
 
     # Get LangChain message history for the generation chain
     chat_history = conversation_mgr.get_langchain_history(user_id)
+    print(f"  ③ MEMORY          │ {len(chat_history)} messages in conversation history for user={user_id}")
 
     # ── Step 4: Generation Chain (Ollama LLM) ─────────────────────────────
     try:
@@ -261,8 +271,9 @@ def chat(req: ChatRequest):
             context=context,
             chat_history=chat_history[:-1],  # exclude current message (already in prompt)
         )
+        print(f"  ④ LLM GENERATION  │ Ollama responded │ llm_confidence={llm_conf:.3f} │ answer_length={len(answer)} chars")
     except RuntimeError as e:
-        print(f"[chat] LLM unavailable: {e}")
+        print(f"  ④ LLM GENERATION  │ Ollama unavailable — using retrieval fallback")
         answer   = f"Based on similar past issues:\n\n{results[0].get('resolution', 'No solution available')}"
         llm_conf = 0.0
 
@@ -272,6 +283,10 @@ def chat(req: ChatRequest):
     # ── Step 5: Confidence Engine + Decision ──────────────────────────────
     final_conf = compute_confidence(similarity, llm_conf, success_rate)
     action     = decide(final_conf)
+    action_emoji = {"auto_resolve": "🟢", "suggest": "🟡", "escalate": "🔴"}.get(action, "⚪")
+    print(f"  ⑤ CONFIDENCE      │ similarity={similarity:.3f} × 0.4 + llm={llm_conf:.3f} × 0.3 + success={success_rate:.3f} × 0.3 = {final_conf:.3f}")
+    print(f"  ⑥ DECISION        │ {action_emoji} {action.upper()} (threshold: ≥0.85=auto, ≥0.60=suggest, <0.60=escalate)")
+    print(f"{'─'*70}\n")
 
     # ── Step 6: Build response ────────────────────────────────────────────
     sources = [
@@ -306,6 +321,7 @@ def analyze(req: AnalyzeRequest):
     Called by the backend when creating tickets.
     """
     try:
+        print(f"\n🏷️  CLASSIFY │ issue=\"{req.issue[:60]}\"")
         result = classification_chain.classify(req.issue)
 
         # Agent matching: find agent whose skills best match the category
@@ -319,6 +335,8 @@ def analyze(req: AnalyzeRequest):
                     break
             if not best_agent and req.agents:
                 best_agent = req.agents[0]["id"]
+
+        print(f"   └─ result │ category={result['category']} │ priority={result['priority']} │ confidence={result['confidence']:.3f} │ agent={'matched' if best_agent else 'none'}")
 
         return {
             "category": result["category"],
@@ -338,6 +356,13 @@ def kb_add(req: KBAddRequest):
     Called when tickets are resolved — KB grows dynamically.
     """
     try:
+        print(f"\n📚 KB ADD │ {req.ticket_id} │ source={req.source} │ category={req.category}")
+        print(f"   └─ issue:      \"{req.issue[:70]}\"")
+        print(f"   └─ resolution: \"{req.resolution[:70]}\"")
+        if req.failed_attempts:
+            print(f"   └─ failed({len(req.failed_attempts)}):  {[f[:40] for f in req.failed_attempts]}")
+        print(f"   └─ rounds:     {req.rounds_to_resolve}")
+
         success = retrieval_chain.add_to_kb(
             issue=req.issue,
             resolution=req.resolution,
@@ -346,7 +371,10 @@ def kb_add(req: KBAddRequest):
             root_cause=req.root_cause,
             source=req.source,
             ticket_id=req.ticket_id,
+            failed_attempts=req.failed_attempts,
+            rounds_to_resolve=req.rounds_to_resolve,
         )
+        print(f"   └─ ✅ FAISS vectors now: {retrieval_chain.vector_count}")
         return {"ok": success, "vectors": retrieval_chain.vector_count}
     except Exception as e:
         traceback.print_exc()
