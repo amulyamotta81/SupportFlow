@@ -58,9 +58,9 @@ async function seed() {
   });
 
   const agentDefs = [
-    { email: 'agent@test.com', password: 'password123', name: 'John Smith', role: 'agent', skills: ['Network', 'VPN', 'Security'], workload: 0 },
+    { email: 'agent@test.com', password: 'password123', name: 'John Smith', role: 'agent', skills: ['Network', 'VPN', 'Security', 'Storage & Backup'], workload: 0 },
     { email: 'agent2@test.com', password: 'password123', name: 'Sarah Jones', role: 'agent', skills: ['Hardware', 'Software'], workload: 0 },
-    { email: 'agent3@test.com', password: 'password123', name: 'Mike Wilson', role: 'agent', skills: ['Email', 'Account', 'Network'], workload: 0 }
+    { email: 'agent3@test.com', password: 'password123', name: 'Mike Wilson', role: 'agent', skills: ['Email', 'Account', 'General'], workload: 0 }
   ];
 
   const agents = [];

@@ -22,6 +22,34 @@ const callAI = async (endpoint, data, timeout = 10000) => {
   }
 };
 
+/**
+ * Smart agent routing: skill match + lowest workload.
+ * 1. Find agents whose skills include the ticket category → pick lowest workload
+ * 2. If no skill match → pick the overall lowest workload agent
+ */
+const findBestAgent = async (category) => {
+  const agents = await User.find({ role: 'agent' }).select('_id name skills workload').lean();
+  if (!agents.length) return null;
+
+  const catLower = (category || '').toLowerCase();
+
+  // Agents whose skills match the category, sorted by workload
+  const skilled = agents
+    .filter(a => (a.skills || []).some(s => s.toLowerCase() === catLower))
+    .sort((a, b) => a.workload - b.workload);
+
+  if (skilled.length) {
+    const chosen = skilled[0];
+    log('🎯', 'AGENT ROUTING', `Skill match: ${chosen.name} │ skills=[${chosen.skills}] │ workload=${chosen.workload} │ category=${category}`);
+    return chosen;
+  }
+
+  // Fallback: lowest workload regardless of skills
+  const fallback = agents.sort((a, b) => a.workload - b.workload)[0];
+  log('🎯', 'AGENT ROUTING', `No skill match for "${category}" │ fallback: ${fallback.name} │ workload=${fallback.workload}`);
+  return fallback;
+};
+
 const fetchSimilarTicketsFromDB = async (issue, category, limit = 5) => {
   const baseQuery = { status: 'Resolved', resolution: { $exists: true, $ne: '' } };
   const query = category && category !== 'General' ? { ...baseQuery, category } : baseQuery;
@@ -114,14 +142,12 @@ router.post('/', authenticate, async (req, res) => {
       slaDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
 
-    const agent = aiResult?.bestAgent
-      ? await User.findOne({ _id: aiResult.bestAgent, role: 'agent' })
-      : await User.findOne({ role: 'agent' }).sort({ workload: 1 });
+    const agent = await findBestAgent(resolvedCategory);
     if (agent) {
       ticket.assignedAgentId = agent._id;
       await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
       await ticket.save();
-      log('👤', 'AGENT ASSIGNED', `${ticketId} → ${agent.name || agent.email} (workload: ${agent.workload + 1})`);
+      log('👤', 'AGENT ASSIGNED', `${ticketId} → ${agent.name} │ skills=[${agent.skills}] │ workload=${agent.workload + 1}`);
     }
 
     log('✅', 'TICKET CREATED', `${ticketId} │ ${resolvedCategory} │ ${resolvedPriority} │ SLA: 24h`);
@@ -317,6 +343,38 @@ router.post('/:id/feedback', authenticate, async (req, res) => {
       .populate('assignedAgentId', 'name email skills')
       .populate('agentSolution.submittedBy', 'name role');
     res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/tickets/assign-unassigned — bulk assign agents to unassigned tickets ─
+router.post('/assign-unassigned', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const unassigned = await Ticket.find({
+      assignedAgentId: { $in: [null, undefined] },
+      status: { $ne: 'Resolved' },
+    }).lean();
+
+    log('🔧', 'BULK ASSIGN START', `Found ${unassigned.length} unassigned tickets`);
+
+    if (!unassigned.length)
+      return res.json({ message: 'No unassigned tickets found', assigned: 0 });
+
+    let assigned = 0;
+    for (const ticket of unassigned) {
+      const agent = await findBestAgent(ticket.category);
+      if (agent) {
+        await Ticket.updateOne(
+          { _id: ticket._id },
+          { $set: { assignedAgentId: agent._id, updatedAt: new Date() } }
+        );
+        await User.updateOne({ _id: agent._id }, { $inc: { workload: 1 } });
+        assigned++;
+        log('👤', 'BULK ASSIGNED', `${ticket.ticketId} │ ${ticket.category} → ${agent.name} │ skills=[${agent.skills}]`);
+      }
+    }
+
+    log('🔧', 'BULK ASSIGN DONE', `Assigned ${assigned}/${unassigned.length} tickets`);
+    res.json({ message: `Assigned agents to ${assigned} tickets`, assigned, total: unassigned.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
