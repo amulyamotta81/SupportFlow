@@ -3,36 +3,31 @@ classification_chain.py
 -----------------------
 LangChain Classification Chain using DistilBERT.
 
-Automatically assigns Category and Priority to a ticket based on the
-issue description text. Uses a fine-tuned DistilBERT zero-shot
-classification model wrapped as a LangChain Runnable.
+Supports two modes:
+  1. Fine-tuned model (preferred) — loads from models/ticket-classifier/
+     Trained on your actual ticket data via train_classifier.py
+  2. Zero-shot fallback — uses distilbert-base-uncased-mnli if no trained model found
 
 Pipeline:
   1. User issue text comes in
-  2. DistilBERT zero-shot classifier scores candidate labels
-  3. Returns top category + inferred priority
+  2. DistilBERT classifies into category
+  3. Priority inferred from keywords
+  4. Returns category + priority + confidence
 """
 
-import re
+import os
+import json
+import torch
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from langchain_core.output_parsers import StrOutputParser
-from transformers import pipeline
 
-# ── Category & Priority labels ────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 
-CATEGORY_LABELS = [
-    "VPN",
-    "Network",
-    "Security",
-    "Hardware",
-    "Cloud & Servers",
-    "Storage & Backup",
-    "Software",
-    "Email",
-    "Account",
-    "Database",
-    "General",
-]
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FINETUNED_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "models", "ticket-classifier"
+)
+
+# ── Priority keywords ────────────────────────────────────────────────────────
 
 PRIORITY_KEYWORDS = {
     "Critical": [
@@ -58,24 +53,36 @@ PRIORITY_KEYWORDS = {
 
 class ClassificationChain:
     """
-    LangChain-based classification chain using DistilBERT zero-shot classifier.
+    LangChain-based classification chain using DistilBERT.
+
+    Auto-detects fine-tuned model at models/ticket-classifier/.
+    Falls back to zero-shot if not found.
 
     Usage:
         chain = ClassificationChain()
         result = chain.classify("My VPN keeps disconnecting every 5 minutes")
-        # result = {"category": "VPN", "priority": "High", "confidence": 0.87}
+        # result = {"category": "Network", "priority": "High", "confidence": 0.92}
     """
 
     def __init__(self):
-        # Load DistilBERT zero-shot classification pipeline
-        # Uses distilbert-base-uncased-mnli for zero-shot classification
-        print("[ClassificationChain] Loading DistilBERT model...")
-        self._classifier = pipeline(
-            "zero-shot-classification",
-            model="typeform/distilbert-base-uncased-mnli",
-            device=-1,  # CPU; set to 0 for GPU
-        )
-        print("[ClassificationChain] DistilBERT model loaded.")
+        self._mode = None
+        self._classifier = None
+        self._model = None
+        self._tokenizer = None
+        self._labels = None
+        self._id2label = None
+        self._device = None
+
+        # Try loading fine-tuned model first
+        if self._load_finetuned():
+            self._mode = "finetuned"
+            print(f"[ClassificationChain] Loaded FINE-TUNED model from {FINETUNED_MODEL_DIR}")
+            print(f"[ClassificationChain] Labels: {self._labels}")
+        else:
+            self._load_zeroshot()
+            self._mode = "zeroshot"
+            print("[ClassificationChain] No fine-tuned model found. Using ZERO-SHOT fallback.")
+            print("[ClassificationChain] Run 'python train_classifier.py' to train a better model.")
 
         # Build the LangChain chain
         self.chain = (
@@ -83,29 +90,114 @@ class ClassificationChain:
             | RunnableLambda(self._run_classification)
         )
 
+    def _load_finetuned(self) -> bool:
+        """Try loading the fine-tuned DistilBertForSequenceClassification model."""
+        label_map_path = os.path.join(FINETUNED_MODEL_DIR, "label_map.json")
+        config_path = os.path.join(FINETUNED_MODEL_DIR, "config.json")
+
+        if not os.path.exists(label_map_path) or not os.path.exists(config_path):
+            return False
+
+        try:
+            from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+
+            # Load label map
+            with open(label_map_path, "r") as f:
+                label_map = json.load(f)
+            self._labels = label_map["labels"]
+            self._id2label = {int(k): v for k, v in label_map["id2label"].items()}
+
+            # Load model and tokenizer
+            self._tokenizer = DistilBertTokenizer.from_pretrained(FINETUNED_MODEL_DIR)
+            self._model = DistilBertForSequenceClassification.from_pretrained(FINETUNED_MODEL_DIR)
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._model.to(self._device)
+            self._model.eval()
+
+            return True
+        except Exception as e:
+            print(f"[ClassificationChain] Failed to load fine-tuned model: {e}")
+            return False
+
+    def _load_zeroshot(self):
+        """Load the zero-shot classification pipeline as fallback."""
+        from transformers import pipeline
+        print("[ClassificationChain] Loading zero-shot DistilBERT model...")
+        self._classifier = pipeline(
+            "zero-shot-classification",
+            model="typeform/distilbert-base-uncased-mnli",
+            device=-1,
+        )
+        self._labels = [
+            "Network", "Hardware", "Software", "Security",
+            "Cloud & Servers", "Storage & Backup", "Email",
+            "Account", "General",
+        ]
+        print("[ClassificationChain] Zero-shot model loaded.")
+
     def _run_classification(self, inputs: dict) -> dict:
-        """
-        Core classification logic:
-        1. Run DistilBERT zero-shot on category labels
-        2. Infer priority from keywords + urgency tone
-        """
+        """Route to fine-tuned or zero-shot classification."""
+        if self._mode == "finetuned":
+            return self._classify_finetuned(inputs)
+        else:
+            return self._classify_zeroshot(inputs)
+
+    def _classify_finetuned(self, inputs: dict) -> dict:
+        """Classify using the fine-tuned DistilBertForSequenceClassification."""
         issue_text = inputs.get("issue", "")
 
-        # ── Step 1: Category classification with DistilBERT ──────────────
+        encoding = self._tokenizer(
+            issue_text,
+            max_length=128,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+        input_ids = encoding["input_ids"].to(self._device)
+        attention_mask = encoding["attention_mask"].to(self._device)
+
+        with torch.no_grad():
+            outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
+            probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+
+        probs_np = probs.cpu().numpy()[0]
+        top_idx = probs_np.argmax()
+        top_category = self._id2label[int(top_idx)]
+        confidence = float(probs_np[top_idx])
+
+        # Build all_categories dict (top 5)
+        sorted_indices = probs_np.argsort()[::-1][:5]
+        all_categories = {
+            self._id2label[int(i)]: round(float(probs_np[i]), 3)
+            for i in sorted_indices
+        }
+
+        priority = self._infer_priority(issue_text)
+
+        return {
+            "category": top_category,
+            "priority": priority,
+            "confidence": round(confidence, 3),
+            "all_categories": all_categories,
+            "model": "finetuned",
+        }
+
+    def _classify_zeroshot(self, inputs: dict) -> dict:
+        """Classify using zero-shot (fallback)."""
+        issue_text = inputs.get("issue", "")
+
         category_result = self._classifier(
             issue_text,
-            candidate_labels=CATEGORY_LABELS,
+            candidate_labels=self._labels,
             multi_label=False,
         )
 
         top_category = category_result["labels"][0]
         category_confidence = category_result["scores"][0]
 
-        # If confidence is too low, fall back to "General"
         if category_confidence < 0.25:
             top_category = "General"
 
-        # ── Step 2: Priority inference from keywords ─────────────────────
         priority = self._infer_priority(issue_text)
 
         return {
@@ -116,19 +208,18 @@ class ClassificationChain:
                 zip(category_result["labels"][:5],
                     [round(s, 3) for s in category_result["scores"][:5]])
             ),
+            "model": "zeroshot",
         }
 
     def _infer_priority(self, text: str) -> str:
         """Infer priority based on urgency keywords in the issue text."""
         text_lower = text.lower()
 
-        # Score each priority level
         scores = {}
         for level, keywords in PRIORITY_KEYWORDS.items():
             score = sum(1 for kw in keywords if kw in text_lower)
             scores[level] = score
 
-        # Pick highest-scoring priority, default to Medium
         if max(scores.values()) == 0:
             return "Medium"
 
@@ -137,7 +228,7 @@ class ClassificationChain:
     def classify(self, issue: str) -> dict:
         """
         Convenience method to classify a single issue.
-        Returns: {"category": str, "priority": str, "confidence": float}
+        Returns: {"category": str, "priority": str, "confidence": float, "model": str}
         """
         return self.chain.invoke({"issue": issue})
 
