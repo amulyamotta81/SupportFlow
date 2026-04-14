@@ -54,7 +54,7 @@ function SolutionSubmitPanel({ ticket, onUpdated }) {
   const [steps, setSteps]   = useState(ticket.agentSolution?.steps?.length ? ticket.agentSolution.steps : ['']);
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState('');
-  const [done, setDone]     = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const addStep    = () => setSteps(s => [...s, '']);
   const removeStep = i => setSteps(s => s.filter((_, idx) => idx !== i));
@@ -68,7 +68,7 @@ function SolutionSubmitPanel({ ticket, onUpdated }) {
         text: text.trim(),
         steps: steps.filter(s => s.trim()),
       });
-      setDone(true);
+      setEditing(false);
       onUpdated(res.data);
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to submit. Try again.');
@@ -76,12 +76,26 @@ function SolutionSubmitPanel({ ticket, onUpdated }) {
     setSaving(false);
   };
 
-  if (done || (ticket.agentSolution?.text && !saving)) {
+  if (ticket.agentSolution?.text && !editing) {
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2 text-emerald-400 text-sm font-medium">
           <CheckCircle2 size={16} /> Solution submitted — visible to user now
         </div>
+
+        {/* Show conversation history from internal notes */}
+        {ticket.internalNotes?.filter(n => n.text?.includes('🔄')).length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Conversation History</p>
+            {ticket.internalNotes.filter(n => n.text?.includes('🔄')).map((n, i) => (
+              <div key={i} className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm">
+                {n.text}
+                <p className="text-xs text-slate-500 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
         {ticket.userFeedback?.satisfied === false && (
           <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
             <span className="font-semibold">User replied:</span>{' '}
@@ -97,10 +111,10 @@ function SolutionSubmitPanel({ ticket, onUpdated }) {
         {/* Allow re-submitting if user said not working */}
         {ticket.userFeedback?.satisfied === false && (
           <button
-            onClick={() => setDone(false)}
-            className="text-sm text-blue-400 hover:text-blue-300 underline"
+            onClick={() => { setEditing(true); setText(''); setSteps(['']); }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold transition-colors"
           >
-            Submit revised solution
+            <RefreshCw size={14} /> Submit revised solution
           </button>
         )}
       </div>

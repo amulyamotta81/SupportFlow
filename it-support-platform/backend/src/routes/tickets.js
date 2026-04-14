@@ -191,6 +191,19 @@ router.post('/:id/solution', authenticate, async (req, res) => {
     const { text, steps = [] } = req.body;
     if (!text?.trim()) return res.status(400).json({ error: 'Solution text is required' });
 
+    // If this is a revised solution (user previously said not working),
+    // log the old solution in internal notes and clear feedback so the
+    // conversation cycle restarts cleanly.
+    if (ticket.userFeedback?.satisfied === false && ticket.agentSolution?.text) {
+      ticket.internalNotes = ticket.internalNotes || [];
+      ticket.internalNotes.push({
+        userId:    req.user._id,
+        text:      `📝 Revised solution submitted (previous: "${ticket.agentSolution.text.slice(0, 100)}")`,
+        createdAt: new Date(),
+      });
+      ticket.userFeedback = undefined;
+    }
+
     ticket.agentSolution = {
       text:        text.trim(),
       steps:       Array.isArray(steps) ? steps.filter(s => s?.trim()) : [],
