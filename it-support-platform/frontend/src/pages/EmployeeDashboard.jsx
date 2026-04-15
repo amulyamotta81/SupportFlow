@@ -1,11 +1,12 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
-  MessageCircle, PlusCircle, LogOut, Clock, CheckCircle2,
+  MessageCircle, PlusCircle, LogOut, CheckCircle2,
   AlertCircle, Loader2, TrendingUp, RefreshCw, Bell
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import NotificationPanel, { buildNotifications } from '../components/NotificationPanel';
 
 const STATUS_STYLE = {
   'Open':        'bg-blue-500/15 text-blue-300 border-blue-500/30',
@@ -45,6 +46,7 @@ export default function EmployeeDashboard() {
   const [tickets,    setTickets]    = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showNotifs, setShowNotifs] = useState(false);
 
   const fetchTickets = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -90,6 +92,20 @@ export default function EmployeeDashboard() {
           >
             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
           </button>
+          <div className="relative">
+            <button onClick={() => setShowNotifs(v => !v)} className="p-2 rounded-lg hover:bg-slate-700 relative">
+              <Bell size={18} />
+              {(() => { const c = buildNotifications(tickets, 'employee').length; return c > 0 ? (
+                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full text-xs flex items-center justify-center">{c}</span>
+              ) : null; })()}
+            </button>
+            {showNotifs && (
+              <NotificationPanel
+                notifications={buildNotifications(tickets, 'employee')}
+                onClose={() => setShowNotifs(false)}
+              />
+            )}
+          </div>
           <button
             onClick={() => { logout(); navigate('/'); }}
             className="flex items-center gap-1.5 text-slate-400 hover:text-white text-sm transition-colors"

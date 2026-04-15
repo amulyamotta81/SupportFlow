@@ -1,13 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import api from '../services/api';
-import { ArrowLeft, Zap, ChevronDown, CheckCircle2, AlertTriangle } from 'lucide-react';
-
-const CATEGORIES = [
-  'Network', 'Hardware', 'Software', 'Security',
-  'Email', 'VPN', 'Account', 'General'
-];
-const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+import { ArrowLeft, Zap, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 const PRIORITY_COLOR = {
   Low:      'text-slate-300 border-slate-500',
@@ -23,10 +17,13 @@ export default function TicketCreate() {
 
   // Pre-fill from chatbot if available
   const [issue,    setIssue]    = useState(state.issue    || '');
-  const [category, setCategory] = useState(state.category || 'General');
-  const [priority, setPriority] = useState(state.priority || 'Medium');
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState('');
+
+  // AI-analyzed category/priority from chatbot (read-only)
+  const fromChatbot = !!(state.category && state.priority);
+  const category = state.category || null;
+  const priority = state.priority || null;
 
   // AI analysis passed from chatbot
   const aiAnalysis = state.aiAnalysis || null;
@@ -38,10 +35,10 @@ export default function TicketCreate() {
     setError('');
     try {
       const payload = {
-        issue:    issue.trim(),
-        category,
-        priority,
-        // Pass AI analysis so backend can store it on the ticket
+        issue: issue.trim(),
+        // Only send category/priority if pre-analyzed by chatbot AI;
+        // otherwise backend will auto-classify via AI service
+        ...(fromChatbot && { category, priority }),
         ...(hasAI && { aiAnalysis })
       };
       const res = await api.post('/tickets', payload);
@@ -65,7 +62,7 @@ export default function TicketCreate() {
       <main className="max-w-2xl mx-auto p-6 space-y-5">
         <div>
           <h1 className="text-2xl font-bold">Raise New Ticket</h1>
-          <p className="text-slate-400 text-sm mt-1">A support agent will be assigned automatically.</p>
+          <p className="text-slate-400 text-sm mt-1">Category, priority, and agent will be assigned automatically by AI.</p>
         </div>
 
         {/* AI pre-fill notice */}
@@ -76,7 +73,7 @@ export default function TicketCreate() {
               <p className="font-medium text-blue-300 mb-1">Pre-filled from IT Assistant</p>
               <p className="text-blue-200/80">
                 Category, priority, and issue description have been filled in from your chat session.
-                {aiAnalysis.confidence > 0 && ` AI confidence: ${Math.round(aiAnalysis.confidence * 100)}%.`}
+                {aiAnalysis.confidence > 0 && ` AI confidence: ${aiAnalysis.confidence > 1 ? aiAnalysis.confidence.toFixed(2) : (aiAnalysis.confidence * 100).toFixed(2)}%.`}
               </p>
               {aiAnalysis.suggestedFix?.length > 0 && (
                 <p className="mt-1 text-blue-200/70 text-xs">
@@ -99,41 +96,28 @@ export default function TicketCreate() {
           />
         </div>
 
-        {/* Category */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Category</label>
-          <div className="relative">
-            <select
-              value={category}
-              onChange={e => setCategory(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-xl text-sm appearance-none focus:outline-none focus:border-blue-500 transition-colors"
-            >
-              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-            </select>
-            <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        {/* Category & Priority — AI-determined */}
+        {fromChatbot ? (
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Category</label>
+              <div className="px-4 py-3 bg-slate-800 border border-slate-600 rounded-xl text-sm text-slate-200">
+                {category}
+              </div>
+            </div>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Priority</label>
+              <div className={`px-4 py-3 bg-slate-800 border rounded-xl text-sm font-medium ${PRIORITY_COLOR[priority]}`}>
+                {priority}
+              </div>
+            </div>
           </div>
-        </div>
-
-        {/* Priority */}
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">Priority</label>
-          <div className="grid grid-cols-4 gap-2">
-            {PRIORITIES.map(p => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPriority(p)}
-                className={`py-2.5 rounded-xl text-sm font-medium border transition-all ${
-                  priority === p
-                    ? `${PRIORITY_COLOR[p]} bg-slate-700`
-                    : 'text-slate-500 border-slate-700 hover:border-slate-500'
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+        ) : (
+          <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-300">
+            <Zap size={16} className="mt-0.5 flex-shrink-0 text-amber-400" />
+            <p>Category and priority will be <span className="text-white font-medium">automatically determined by AI</span> when you submit.</p>
           </div>
-        </div>
+        )}
 
         {/* AI suggested fix preview */}
         {hasAI && aiAnalysis.suggestedFix?.length > 0 && (

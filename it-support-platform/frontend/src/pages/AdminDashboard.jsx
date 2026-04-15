@@ -6,12 +6,32 @@ import {
   Home, Users, Ticket, BarChart3, Brain, Bell, LogOut,
   RefreshCw, AlertTriangle, CheckCircle2, ThumbsDown, Database, Search
 } from 'lucide-react';
+import {
+  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, Legend
+} from 'recharts';
+import NotificationPanel, { buildNotifications } from '../components/NotificationPanel';
 
 const STATUS_STYLE = {
   'Open':        'bg-blue-500/15 text-blue-300',
   'In Progress': 'bg-amber-500/15 text-amber-300',
   'Resolved':    'bg-emerald-500/15 text-emerald-300',
   'Escalated':   'bg-red-500/15 text-red-300',
+};
+
+const CATEGORY_COLORS = ['#3b82f6','#8b5cf6','#06b6d4','#f59e0b','#10b981','#ef4444','#ec4899','#6b7280'];
+const STATUS_COLORS   = { Open: '#3b82f6', 'In Progress': '#f59e0b', Resolved: '#10b981', Escalated: '#ef4444' };
+const PRIORITY_COLORS = { Low: '#94a3b8', Medium: '#f59e0b', High: '#f97316', Critical: '#ef4444' };
+
+const ChartTooltip = ({ active, payload }) => {
+  if (!active || !payload?.length) return null;
+  const d = payload[0];
+  return (
+    <div className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-xs shadow-lg">
+      <p className="text-white font-medium">{d.name || d.payload?._id || d.payload?.name}</p>
+      <p className="text-slate-300">{d.value} ticket{d.value !== 1 ? 's' : ''}</p>
+    </div>
+  );
 };
 
 function SyncAIButton() {
@@ -52,6 +72,9 @@ export default function AdminDashboard() {
   const [tickets, setTickets]       = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showNotifs, setShowNotifs] = useState(false);
+  const [statusFilter, setStatusFilter]     = useState('All');
+  const [priorityFilter, setPriorityFilter] = useState('All');
 
   const fetchAll = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -78,19 +101,22 @@ export default function AdminDashboard() {
   const userReplied = tickets.filter(t => t.userFeedback?.satisfied === false);
   const alertCount = escalated.length + userReplied.length;
 
-  // Filter tickets by search query (ticket ID, issue text, category, user name)
-  const filteredTickets = searchQuery.trim()
-    ? tickets.filter(t => {
-        const q = searchQuery.toLowerCase();
-        return (
-          (t.ticketId || '').toLowerCase().includes(q) ||
-          (t.issue || '').toLowerCase().includes(q) ||
-          (t.category || '').toLowerCase().includes(q) ||
-          (t.userId?.name || '').toLowerCase().includes(q) ||
-          (t.userId?.email || '').toLowerCase().includes(q)
-        );
-      })
-    : tickets;
+  // Filter tickets by search query, status, and priority
+  const filteredTickets = tickets.filter(t => {
+    if (statusFilter !== 'All' && t.status !== statusFilter) return false;
+    if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (
+        (t.ticketId || '').toLowerCase().includes(q) ||
+        (t.issue || '').toLowerCase().includes(q) ||
+        (t.category || '').toLowerCase().includes(q) ||
+        (t.userId?.name || '').toLowerCase().includes(q) ||
+        (t.userId?.email || '').toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
 
   const NavBtn = ({ section, icon: Icon, label, badge }) => (
     <button
@@ -170,14 +196,22 @@ export default function AdminDashboard() {
             >
               <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
             </button>
-            <button className="p-2 rounded-lg hover:bg-slate-700 relative">
-              <Bell size={20} />
-              {alertCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full text-xs flex items-center justify-center">
-                  {alertCount}
-                </span>
+            <div className="relative">
+              <button onClick={() => setShowNotifs(v => !v)} className="p-2 rounded-lg hover:bg-slate-700 relative">
+                <Bell size={20} />
+                {alertCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full text-xs flex items-center justify-center">
+                    {alertCount}
+                  </span>
+                )}
+              </button>
+              {showNotifs && (
+                <NotificationPanel
+                  notifications={buildNotifications(tickets, 'admin')}
+                  onClose={() => setShowNotifs(false)}
+                />
               )}
-            </button>
+            </div>
           </div>
         </header>
 
@@ -233,27 +267,40 @@ export default function AdminDashboard() {
 
               {analytics && (
                 <div className="grid md:grid-cols-2 gap-5">
+                  {/* Status Distribution Pie */}
                   <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
-                    <h3 className="font-semibold mb-3 text-sm">By Category</h3>
-                    <ul className="space-y-2">
-                      {(analytics.byCategory || []).map((c, i) => (
-                        <li key={i} className="flex justify-between text-sm">
-                          <span className="text-slate-300">{c._id}</span>
-                          <span className="text-slate-500">{c.count}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <h3 className="font-semibold mb-3 text-sm">Status Distribution</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <PieChart>
+                        <Pie
+                          data={(analytics.byStatus || []).map(s => ({ name: s._id, value: s.count }))}
+                          cx="50%" cy="50%" innerRadius={45} outerRadius={75}
+                          dataKey="value" paddingAngle={3}
+                        >
+                          {(analytics.byStatus || []).map((s, i) => (
+                            <Cell key={i} fill={STATUS_COLORS[s._id] || '#6b7280'} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend formatter={v => <span className="text-slate-300 text-xs">{v}</span>} />
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
+                  {/* Priority Bar Chart */}
                   <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
                     <h3 className="font-semibold mb-3 text-sm">By Priority</h3>
-                    <ul className="space-y-2">
-                      {(analytics.byPriority || []).map((p, i) => (
-                        <li key={i} className="flex justify-between text-sm">
-                          <span className="text-slate-300">{p._id}</span>
-                          <span className="text-slate-500">{p.count}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={(analytics.byPriority || []).map(p => ({ name: p._id, count: p.count }))} barSize={36}>
+                        <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                          {(analytics.byPriority || []).map((p, i) => (
+                            <Cell key={i} fill={PRIORITY_COLORS[p._id] || '#6b7280'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
               )}
@@ -297,7 +344,7 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ALL TICKETS — with search */}
+          {/* ALL TICKETS — with search + filters */}
           {activeSection === 'tickets' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-4">
@@ -319,6 +366,39 @@ export default function AdminDashboard() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Status + Priority filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500 mr-1">Status:</span>
+                {['All', 'Open', 'In Progress', 'Resolved', 'Escalated'].map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setStatusFilter(s)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      statusFilter === s
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+                <span className="text-slate-700 mx-1">|</span>
+                <span className="text-xs text-slate-500 mr-1">Priority:</span>
+                {['All', 'Critical', 'High', 'Medium', 'Low'].map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setPriorityFilter(p)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      priorityFilter === p
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
               </div>
 
               {filteredTickets.length === 0 && searchQuery ? (
@@ -369,80 +449,124 @@ export default function AdminDashboard() {
           {/* ANALYTICS */}
           {activeSection === 'analytics' && analytics && (
             <div className="space-y-5">
-              <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
-                <h3 className="font-semibold mb-4">Overview</h3>
-                <div className="grid md:grid-cols-2 gap-6">
-                  <div>
-                    <h4 className="text-xs text-slate-400 uppercase tracking-wide mb-3">By Category</h4>
-                    <ul className="space-y-2">
-                      {(analytics.byCategory || []).map((c, i) => (
-                        <li key={i} className="flex items-center gap-3">
-                          <div className="flex-1 text-sm text-slate-300">{c._id}</div>
-                          <div className="w-32 bg-slate-700 rounded-full h-1.5">
-                            <div
-                              className="bg-blue-500 h-1.5 rounded-full"
-                              style={{ width: `${Math.min(100, (c.count / analytics.totalTickets) * 100)}%` }}
-                            />
-                          </div>
-                          <div className="text-xs text-slate-500 w-6 text-right">{c.count}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="text-xs text-slate-400 uppercase tracking-wide mb-3">By Priority</h4>
-                    <ul className="space-y-2">
-                      {(analytics.byPriority || []).map((p, i) => (
-                        <li key={i} className="flex items-center gap-3">
-                          <div className="flex-1 text-sm text-slate-300">{p._id}</div>
-                          <div className="w-32 bg-slate-700 rounded-full h-1.5">
-                            <div
-                              className="bg-amber-500 h-1.5 rounded-full"
-                              style={{ width: `${Math.min(100, (p.count / analytics.totalTickets) * 100)}%` }}
-                            />
-                          </div>
-                          <div className="text-xs text-slate-500 w-6 text-right">{p.count}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+              {/* Row 1: Category Pie + Priority Bar */}
+              <div className="grid md:grid-cols-2 gap-5">
+                <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                  <h3 className="font-semibold mb-4 text-sm">Tickets by Category</h3>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <PieChart>
+                      <Pie
+                        data={(analytics.byCategory || []).map(c => ({ name: c._id, value: c.count }))}
+                        cx="50%" cy="50%" outerRadius={90}
+                        dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      >
+                        {(analytics.byCategory || []).map((_, i) => (
+                          <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<ChartTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
+                <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                  <h3 className="font-semibold mb-4 text-sm">Tickets by Priority</h3>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={(analytics.byPriority || []).map(p => ({ name: p._id, count: p.count }))} barSize={44}>
+                      <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                        {(analytics.byPriority || []).map((p, i) => (
+                          <Cell key={i} fill={PRIORITY_COLORS[p._id] || '#6b7280'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              {/* Row 2: Status Distribution */}
+              <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                <h3 className="font-semibold mb-4 text-sm">Status Distribution</h3>
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={(analytics.byStatus || []).map(s => ({ name: s._id, count: s.count }))} barSize={52}>
+                    <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                      {(analytics.byStatus || []).map((s, i) => (
+                        <Cell key={i} fill={STATUS_COLORS[s._id] || '#6b7280'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
           )}
 
           {/* AI / KB */}
-          {activeSection === 'ai' && (
-            <div className="space-y-5">
-              <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
-                <h3 className="font-semibold mb-1 flex items-center gap-2">
-                  <Database size={18} className="text-blue-400" /> Knowledge Base
-                </h3>
-                <p className="text-slate-400 text-sm mb-4">
-                  The KB auto-updates when agents or admins resolve tickets and when users confirm solutions.
-                  Run <code className="text-blue-300 bg-slate-700 px-1.5 py-0.5 rounded text-xs">python build_kb.py --verify</code> to see all entries.
-                </p>
-                <SyncAIButton />
-              </div>
+          {activeSection === 'ai' && (() => {
+            // Tickets where the user confirmed the fix worked → solution went into FAISS
+            const kbTickets = tickets.filter(t =>
+              t.status === 'Resolved' && t.resolution && t.userFeedback?.satisfied === true
+            ).sort((a, b) => new Date(b.resolvedAt || b.updatedAt || 0) - new Date(a.resolvedAt || a.updatedAt || 0));
 
-              <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
-                <h3 className="font-semibold mb-3">How the KB Self-Evolves</h3>
-                <div className="space-y-2 text-sm text-slate-400">
-                  {[
-                    ['Agent resolves ticket', 'Solution saved to KB automatically', 'agent_resolution'],
-                    ['Admin resolves escalation', 'High-quality solution saved to KB', 'admin_resolution'],
-                    ['User confirms fix worked', 'Solution saved with high confidence', 'user_confirmed'],
-                  ].map(([trigger, effect, source], i) => (
-                    <div key={i} className="flex items-center gap-3 p-3 bg-slate-700/40 rounded-lg">
-                      <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
-                      <span className="flex-1"><span className="text-white font-medium">{trigger}</span> → {effect}</span>
-                      <code className="text-xs text-blue-300 bg-slate-700 px-2 py-0.5 rounded">{source}</code>
+            return (
+              <div className="space-y-5">
+                {/* KB status + refresh */}
+                <div className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <Database size={18} className="text-blue-400" /> Knowledge Base
+                    </h3>
+                    <SyncAIButton />
+                  </div>
+                  <p className="text-slate-400 text-sm">
+                    The KB auto-updates when tickets are resolved. {kbTickets.length} resolved ticket{kbTickets.length !== 1 ? 's' : ''} have contributed solutions to the FAISS knowledge base.
+                  </p>
+                </div>
+
+                {/* Tickets that fed into KB */}
+                <div className="bg-slate-800 rounded-xl border border-slate-700">
+                  <div className="px-5 py-4 border-b border-slate-700">
+                    <h3 className="font-semibold text-sm">Tickets That Updated the KB ({kbTickets.length})</h3>
+                    <p className="text-slate-500 text-xs mt-0.5">Solutions from these tickets are now in the FAISS vector store and used for future AI responses.</p>
+                  </div>
+                  {kbTickets.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 text-sm">No resolved tickets yet. KB entries will appear here once tickets are resolved.</div>
+                  ) : (
+                    <div className="divide-y divide-slate-700/50 max-h-[32rem] overflow-y-auto">
+                      {kbTickets.map(t => (
+                        <Link
+                          key={t._id}
+                          to={`/tickets/${t._id}`}
+                          className="flex items-start gap-4 px-5 py-4 hover:bg-slate-700/30 transition-colors"
+                        >
+                          <div className="flex-shrink-0 mt-0.5">
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                              <CheckCircle2 size={10} /> User Confirmed
+                            </span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-mono text-blue-400 text-xs">{t.ticketId}</span>
+                              <span className="text-xs text-slate-500">{t.category}</span>
+                              <span className="text-xs text-slate-600">
+                                {t.resolvedAt ? new Date(t.resolvedAt).toLocaleDateString() : ''}
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-300 truncate">{t.issue}</p>
+                            <p className="text-xs text-slate-500 mt-1 truncate">
+                              Solution: {t.resolution}
+                            </p>
+                          </div>
+                        </Link>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </main>
       </div>
     </div>

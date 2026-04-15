@@ -68,7 +68,7 @@ export default function TicketIntelligence() {
             <ul className="space-y-2 text-slate-300">
               <li><strong>Category:</strong> {ticket.category}</li>
               <li><strong>Priority:</strong> {ticket.priority}</li>
-              <li><strong>Confidence:</strong> {ai.confidence ? Math.round(ai.confidence * 100) : '-'}%</li>
+              <li><strong>Confidence:</strong> {ai.confidence ? (ai.confidence > 1 ? ai.confidence.toFixed(2) : (ai.confidence * 100).toFixed(2)) : '-'}%</li>
               <li><strong>Suggested Root Cause:</strong> {ai.rootCause || 'N/A'}</li>
             </ul>
           </div>

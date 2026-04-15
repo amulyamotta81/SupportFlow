@@ -44,12 +44,13 @@ router.patch('/:id', authenticate, authorize('admin'), async (req, res) => {
 
 router.get('/analytics/overview', authenticate, authorize('admin'), async (req, res) => {
   try {
-    const [ticketCount, resolvedCount, agentCount, byCategory, byPriority] = await Promise.all([
+    const [ticketCount, resolvedCount, agentCount, byCategory, byPriority, byStatus] = await Promise.all([
       Ticket.countDocuments(),
       Ticket.countDocuments({ status: 'Resolved' }),
       User.countDocuments({ role: 'agent' }),
       Ticket.aggregate([{ $group: { _id: '$category', count: { $sum: 1 } } }]),
-      Ticket.aggregate([{ $group: { _id: '$priority', count: { $sum: 1 } } }])
+      Ticket.aggregate([{ $group: { _id: '$priority', count: { $sum: 1 } } }]),
+      Ticket.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }])
     ]);
     const rate = ticketCount ? ((resolvedCount / ticketCount) * 100).toFixed(1) : 0;
     console.log(`📊 ANALYTICS │ tickets=${ticketCount} │ resolved=${resolvedCount} │ rate=${rate}% │ agents=${agentCount}`);
@@ -59,6 +60,7 @@ router.get('/analytics/overview', authenticate, authorize('admin'), async (req, 
       agentCount,
       byCategory,
       byPriority,
+      byStatus,
       resolutionRate: rate,
     });
   } catch (err) {
