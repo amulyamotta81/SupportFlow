@@ -13,19 +13,21 @@ router.post('/message', authenticate, async (req, res) => {
     const { message, sessionId } = req.body;
     const userId = req.user._id.toString();
 
-    // Find or create chat session
-    let session;
-    if (sessionId) {
-      session = await ChatHistory.findOne({ sessionId, userId: req.user._id });
-    }
-    if (!session) {
-      session = await ChatHistory.create({
-        userId: req.user._id,
-        sessionId: sessionId || crypto.randomUUID(),
-        title: message.slice(0, 60) + (message.length > 60 ? '...' : ''),
-        messages: [],
-      });
-    }
+    // Find or create chat session using upsert to prevent race conditions
+    // where two concurrent first-messages both try to create the same session
+    const resolvedSessionId = sessionId || crypto.randomUUID();
+    const session = await ChatHistory.findOneAndUpdate(
+      { sessionId: resolvedSessionId, userId: req.user._id },
+      {
+        $setOnInsert: {
+          userId: req.user._id,
+          sessionId: resolvedSessionId,
+          title: message.slice(0, 60) + (message.length > 60 ? '...' : ''),
+          messages: [],
+        },
+      },
+      { upsert: true, new: true }
+    );
 
     // Build recent chat history for AI context (last 10 exchanges)
     const recentHistory = session.messages.slice(-20).map(m => ({

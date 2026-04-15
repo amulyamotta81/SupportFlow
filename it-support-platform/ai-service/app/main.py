@@ -138,15 +138,30 @@ GREETING_PATTERNS = {
     "bye", "goodbye", "see you", "see ya", "later",
 }
 
+# Words that signal a real IT issue even if message starts with a greeting
+IT_KEYWORDS = {
+    "vpn", "wifi", "network", "internet", "email", "password", "login",
+    "error", "crash", "slow", "broken", "not working", "cannot", "can't",
+    "install", "update", "printer", "access", "locked", "reset", "server",
+    "laptop", "computer", "screen", "software", "hardware", "outlook",
+    "teams", "zoom", "drive", "file", "folder", "permission", "firewall",
+    "certificate", "ssl", "dns", "proxy", "port", "timeout", "disconnect",
+    "blue screen", "bsod", "freeze", "stuck", "boot", "startup", "shutdown",
+}
+
 def is_greeting(text: str) -> bool:
     """Check if the message is a greeting or small talk, not an IT issue."""
     cleaned = text.lower().strip().rstrip("!.,?")
-    # Exact match
+    # Exact match against known greetings
     if cleaned in GREETING_PATTERNS:
         return True
-    # Short messages (1-3 words) that start with a greeting word
+    # If message contains any IT-related keyword, it's NOT a greeting
+    # This catches "hello my vpn is broken", "hi I can't login", etc.
+    if any(kw in cleaned for kw in IT_KEYWORDS):
+        return False
+    # Short messages (1-2 words) where ALL words are greetings
     words = cleaned.split()
-    if len(words) <= 3 and words[0] in GREETING_PATTERNS:
+    if len(words) <= 2 and all(w in GREETING_PATTERNS for w in words):
         return True
     return False
 
@@ -246,7 +261,7 @@ def chat(req: ChatRequest):
 
     top = results[0]
     similarity   = float(top.get("similarity", 0.0))
-    success_rate = float(top.get("success_rate", 0.75))
+    success_rate = float(top.get("success_rate", 0.5))
 
     # Use DistilBERT classification, with retrieval as fallback
     category = classified_category if classified_category != "General" else top.get("category", "General")
@@ -296,7 +311,7 @@ def chat(req: ChatRequest):
             "priority":     str(r.get("priority", "Medium")),
             "resolution":   str(r.get("resolution", "No resolution")),
             "similarity":   float(round(r.get("similarity", 0.0), 3)),
-            "success_rate": float(r.get("success_rate", 0.75)),
+            "success_rate": float(r.get("success_rate", 0.5)),
         }
         for r in results
     ]

@@ -168,16 +168,17 @@ class RetrievalChain:
             if doc.metadata.get("type") == "system":
                 continue
 
-            # FAISS returns L2 distance; convert to similarity (0-1)
-            # For normalized vectors, similarity = 1 - (distance / 2)
-            similarity = max(0.0, min(1.0, 1.0 - (score / 2.0)))
+            # LangChain FAISS returns squared L2 distance.
+            # For normalized embeddings, L2² ranges from 0 (identical) to 4 (opposite).
+            # Convert to 0-1 similarity: 1 - (L2² / 4)
+            similarity = max(0.0, min(1.0, 1.0 - (score / 4.0)))
 
             result = {
                 "issue": str(doc.metadata.get("issue", "N/A")),
                 "category": str(doc.metadata.get("category", "General")),
                 "priority": str(doc.metadata.get("priority", "Medium")),
                 "resolution": str(doc.metadata.get("resolution", "No resolution available")),
-                "success_rate": float(doc.metadata.get("success_rate", 0.75)),
+                "success_rate": float(doc.metadata.get("success_rate", 0.5)),
                 "ticket_count": int(doc.metadata.get("ticket_count", 1)),
                 "similarity": float(round(similarity, 3)),
             }
@@ -242,12 +243,25 @@ class RetrievalChain:
             page_content += f"\n[FAILED] {' | '.join(failed_attempts)}"
         page_content += f"\n[RESOLUTION] {resolution}"
 
+        # Compute success_rate from resolution history instead of hardcoding.
+        # - 1 round (fixed first try): 0.9
+        # - 2 rounds: 0.7
+        # - 3+ rounds: 0.5
+        # This feeds into the confidence engine so auto_resolve only triggers
+        # for solutions with a strong track record.
+        if rounds_to_resolve <= 1:
+            computed_success_rate = 0.9
+        elif rounds_to_resolve == 2:
+            computed_success_rate = 0.7
+        else:
+            computed_success_rate = 0.5
+
         metadata = {
             "issue": issue,
             "resolution": resolution,
             "category": category,
             "priority": priority,
-            "success_rate": 0.85,
+            "success_rate": computed_success_rate,
             "ticket_count": 1,
             "source": source,
             "ticket_id": ticket_id,

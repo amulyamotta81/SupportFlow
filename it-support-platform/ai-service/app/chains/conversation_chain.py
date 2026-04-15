@@ -10,7 +10,12 @@ messages in the same chat session for contextual follow-ups.
 Memory is stored in-memory (dict keyed by userId). The backend
 (Node.js) persists full history to MongoDB — this module handles
 the active session memory for the AI service.
+
+Sessions are evicted after a configurable TTL to prevent memory leaks
+in long-running deployments.
 """
+
+import time
 
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage
@@ -25,6 +30,9 @@ class ConversationManager:
     The conversation context is passed to the GenerationChain
     so the LLM can reference prior exchanges.
 
+    Sessions are automatically evicted after `session_ttl_seconds` of
+    inactivity to prevent unbounded memory growth.
+
     Usage:
         conv = ConversationManager()
         conv.add_user_message("user123", "My VPN is not working")
@@ -33,20 +41,41 @@ class ConversationManager:
         # Pass history to GenerationChain as chat_history
     """
 
-    def __init__(self, max_history_per_user: int = 20):
+    def __init__(self, max_history_per_user: int = 20, session_ttl_seconds: int = 3600):
         """
         Args:
             max_history_per_user: Max messages to keep per user session.
                 Older messages are dropped to keep context window manageable.
+            session_ttl_seconds: Seconds of inactivity before a session is evicted.
+                Default: 3600 (1 hour).
         """
         self._histories: dict[str, ChatMessageHistory] = {}
+        self._last_access: dict[str, float] = {}
         self._max_history = max_history_per_user
-        print(f"[ConversationManager] Initialized (max {max_history_per_user} messages/user)")
+        self._ttl = session_ttl_seconds
+        print(f"[ConversationManager] Initialized (max {max_history_per_user} messages/user, TTL {session_ttl_seconds}s)")
+
+    def _evict_expired(self):
+        """Remove sessions that haven't been accessed within the TTL."""
+        now = time.time()
+        expired = [uid for uid, ts in self._last_access.items() if now - ts > self._ttl]
+        for uid in expired:
+            self._histories.pop(uid, None)
+            self._last_access.pop(uid, None)
+        if expired:
+            print(f"[ConversationManager] Evicted {len(expired)} expired session(s), {len(self._histories)} remaining")
+
+    def _touch(self, user_id: str):
+        """Update last access time for a user session."""
+        self._last_access[user_id] = time.time()
 
     def _get_or_create(self, user_id: str) -> ChatMessageHistory:
         """Get or create a ChatMessageHistory for a user."""
+        # Periodically evict expired sessions on access
+        self._evict_expired()
         if user_id not in self._histories:
             self._histories[user_id] = ChatMessageHistory()
+        self._touch(user_id)
         return self._histories[user_id]
 
     def add_user_message(self, user_id: str, content: str):
@@ -106,11 +135,13 @@ class ConversationManager:
         """Clear conversation history for a user (new chat session)."""
         if user_id in self._histories:
             self._histories[user_id].clear()
+            self._last_access.pop(user_id, None)
             print(f"[ConversationManager] Cleared history for user {user_id}")
 
     def clear_all(self):
         """Clear all conversation histories."""
         self._histories.clear()
+        self._last_access.clear()
         print("[ConversationManager] All histories cleared")
 
     def _trim(self, user_id: str):
