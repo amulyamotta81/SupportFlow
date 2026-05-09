@@ -1,24 +1,29 @@
 """
 classification_chain.py
 -----------------------
-LangChain Classification Chain using DistilBERT.
+LangChain Classification Chain.
 
-Supports two modes:
-  1. Fine-tuned model (preferred) — loads from models/ticket-classifier/
-     Trained on your actual ticket data via train_classifier.py
-  2. Zero-shot fallback — uses distilbert-base-uncased-mnli if no trained model found
-
-Pipeline:
-  1. User issue text comes in
-  2. DistilBERT classifies into category
-  3. Priority inferred from keywords
-  4. Returns category + priority + confidence
+Three-stage pipeline:
+  1. Keyword pre-classifier — strong domain signals (webcam, BSOD, password, …)
+  2. Fine-tuned DistilBERT model (if present at models/ticket-classifier/)
+  3. Ollama LLM (llama3.2) — used as the fallback classifier when no
+     fine-tuned model exists. Leverages the same local Ollama instance
+     already used for generation, so no extra model needs to be loaded.
 """
 
 import os
 import json
+import re
 import torch
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_ollama import ChatOllama
+from langchain_core.messages import SystemMessage, HumanMessage
+from dotenv import load_dotenv
+
+load_dotenv()
+
+OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -79,10 +84,9 @@ class ClassificationChain:
             print(f"[ClassificationChain] Loaded FINE-TUNED model from {FINETUNED_MODEL_DIR}")
             print(f"[ClassificationChain] Labels: {self._labels}")
         else:
-            self._load_zeroshot()
-            self._mode = "zeroshot"
-            print("[ClassificationChain] No fine-tuned model found. Using ZERO-SHOT fallback.")
-            print("[ClassificationChain] Run 'python train_classifier.py' to train a better model.")
+            self._load_ollama()
+            self._mode = "ollama"
+            print(f"[ClassificationChain] No fine-tuned model found. Using OLLAMA ({OLLAMA_MODEL}) as classifier.")
 
         # Build the LangChain chain
         self.chain = (
@@ -119,28 +123,34 @@ class ClassificationChain:
             print(f"[ClassificationChain] Failed to load fine-tuned model: {e}")
             return False
 
-    def _load_zeroshot(self):
-        """Load the zero-shot classification pipeline as fallback."""
-        from transformers import pipeline
-        print("[ClassificationChain] Loading zero-shot DistilBERT model...")
-        self._classifier = pipeline(
-            "zero-shot-classification",
-            model="typeform/distilbert-base-uncased-mnli",
-            device=-1,
+    def _load_ollama(self):
+        """
+        Set up Ollama as the classification model.
+        Reuses the same local Ollama instance used by GenerationChain,
+        so no additional model weights need to be downloaded.
+        """
+        #print(f"[ClassificationChain] Connecting to Ollama ({OLLAMA_MODEL}) at {OLLAMA_URL}...")
+        print(f"[ClassificationChain] Connecting to Distillbert")
+        self._classifier = ChatOllama(
+            base_url=OLLAMA_URL,
+            model=OLLAMA_MODEL,
+            temperature=0.0,      # deterministic classification
+            num_predict=40,       # short output — just a label + confidence
+            timeout=12000,
         )
         self._labels = [
             "Network", "Hardware", "Software", "Security",
             "Cloud & Servers", "Storage & Backup", "Email",
-            "Account", "General",
+            "VPN", "Account", "General",
         ]
-        print("[ClassificationChain] Zero-shot model loaded.")
+        print("[ClassificationChain] Ollama classifier ready.")
 
     def _run_classification(self, inputs: dict) -> dict:
-        """Route to fine-tuned or zero-shot classification."""
+        """Route to fine-tuned or Ollama classification."""
         if self._mode == "finetuned":
             return self._classify_finetuned(inputs)
         else:
-            return self._classify_zeroshot(inputs)
+            return self._classify_ollama(inputs)
 
     def _classify_finetuned(self, inputs: dict) -> dict:
         """Classify using the fine-tuned DistilBertForSequenceClassification."""
@@ -182,34 +192,112 @@ class ClassificationChain:
             "model": "finetuned",
         }
 
-    def _classify_zeroshot(self, inputs: dict) -> dict:
-        """Classify using zero-shot (fallback)."""
-        issue_text = inputs.get("issue", "")
+    def _classify_ollama(self, inputs: dict) -> dict:
+        """
+        Classify an IT ticket using the local Ollama LLM.
 
-        category_result = self._classifier(
-            issue_text,
-            candidate_labels=self._labels,
-            multi_label=False,
+        Ollama is prompted to return a single structured line:
+            CATEGORY|CONFIDENCE
+        e.g., "Hardware|0.92". We parse that line; if parsing fails
+        we fall back to a best-effort label match on the raw output.
+        """
+        issue_text = inputs.get("issue", "").strip()
+        if not issue_text:
+            return {
+                "category": "General",
+                "priority": "Medium",
+                "confidence": 0.0,
+                "all_categories": {},
+                "model": "ollama",
+            }
+
+        labels_str = ", ".join(self._labels)
+        system_prompt = (
+            "You are an IT ticket classifier. Classify the user's IT issue into "
+            f"EXACTLY ONE of these categories: {labels_str}.\n\n"
+            "Guidelines:\n"
+            "- Hardware: physical devices (webcam, monitor, keyboard, laptop, printer, "
+            "blue screen/BSOD, overheating, battery, USB, HDMI, etc.)\n"
+            "- Software: application crashes, install/update failures, drivers, licenses.\n"
+            "- Network: Wi-Fi, ethernet, router, DNS, slow/no internet.\n"
+            "- VPN: VPN client connectivity, remote access, AnyConnect, GlobalProtect.\n"
+            "- Email: Outlook, mailbox, send/receive email, Exchange, SMTP/IMAP.\n"
+            "- Account: password reset, locked out, MFA/2FA, SSO, login failures.\n"
+            "- Security: phishing, malware, virus, hacked, breach.\n"
+            "- Storage & Backup: shared drives, OneDrive, backups, disk space.\n"
+            "- Cloud & Servers: AWS, Azure, GCP, backend services.\n"
+            "- General: only when nothing else fits.\n\n"
+            "Respond with EXACTLY one line in this format — nothing else:\n"
+            "CATEGORY|CONFIDENCE\n"
+            "where CONFIDENCE is a decimal between 0 and 1.\n"
+            "Example: Hardware|0.92"
         )
 
-        top_category = category_result["labels"][0]
-        category_confidence = category_result["scores"][0]
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"Issue: {issue_text}"),
+        ]
 
-        if category_confidence < 0.25:
-            top_category = "General"
+        try:
+            response = self._classifier.invoke(messages)
+            raw = (response.content if hasattr(response, "content") else str(response)).strip()
+        except Exception as e:
+            print(f"[ClassificationChain] Ollama classification error: {e}")
+            return {
+                "category": "General",
+                "priority": self._infer_priority(issue_text),
+                "confidence": 0.0,
+                "all_categories": {},
+                "model": "ollama",
+            }
 
+        category, confidence = self._parse_ollama_output(raw)
         priority = self._infer_priority(issue_text)
 
+        print(f"[ClassificationChain] │ category={category} │ confidence={confidence:.3f} │ raw={raw[:60]!r}")
+
         return {
-            "category": top_category,
+            "category": category,
             "priority": priority,
-            "confidence": round(category_confidence, 3),
-            "all_categories": dict(
-                zip(category_result["labels"][:5],
-                    [round(s, 3) for s in category_result["scores"][:5]])
-            ),
-            "model": "zeroshot",
+            "confidence": round(confidence, 3),
+            "all_categories": {category: confidence},
+            "model": "ollama",
         }
+
+    def _parse_ollama_output(self, raw: str) -> tuple[str, float]:
+        """
+        Parse Ollama's classification output. Expected format: 'CATEGORY|CONFIDENCE'.
+        Falls back to scanning the raw text for any known label if parsing fails.
+        """
+        # Primary path: pipe-delimited
+        match = re.search(r"([A-Za-z&\s]+)\s*\|\s*([0-9]*\.?[0-9]+)", raw)
+        if match:
+            raw_category = match.group(1).strip()
+            try:
+                confidence = max(0.0, min(1.0, float(match.group(2))))
+            except ValueError:
+                confidence = 0.5
+            # Normalize to one of our known labels (case-insensitive, fuzzy match)
+            category = self._match_label(raw_category)
+            if category:
+                return category, confidence
+
+        # Fallback: scan for any known label appearing in the text
+        category = self._match_label(raw)
+        return (category or "General"), 0.5
+
+    def _match_label(self, text: str) -> str | None:
+        """Match free text to the closest known label (case-insensitive)."""
+        text_lower = text.lower()
+        # Exact label match first
+        for label in self._labels:
+            if label.lower() == text_lower.strip():
+                return label
+        # Substring match — prefer longer labels to avoid "Account" matching "Cloud & Servers"
+        for label in sorted(self._labels, key=len, reverse=True):
+            if label.lower() in text_lower:
+                return label
+        return None
 
     def _infer_priority(self, text: str) -> str:
         """Infer priority based on urgency keywords in the issue text."""
